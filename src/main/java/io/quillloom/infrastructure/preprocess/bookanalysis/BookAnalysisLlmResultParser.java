@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 将规范化后的 LLM 返回结果转换为 Agent A 的稳定执行结果契约。
@@ -55,6 +56,24 @@ public class BookAnalysisLlmResultParser {
             ));
         }
 
-        return new BookAnalysisTaskResult(bookAnalysis, List.copyOf(constraints));
+        return new BookAnalysisTaskResult(
+                bookAnalysis,
+                List.copyOf(constraints),
+                Map.of(
+                        "acceptedGlobalConstraints", result.globalConstraints().stream()
+                                .map(constraint -> Map.of(
+                                        "type", constraint.type(),
+                                        "description", constraint.description()
+                                ))
+                                .toList(),
+                        "rejectedGlobalConstraints", result.rejectedGlobalConstraints().stream()
+                                .map(rejected -> Map.of(
+                                        "type", rejected.type(),
+                                        "description", rejected.description(),
+                                        "reasonCode", rejected.reasonCode()
+                                ))
+                                .toList()
+                )
+        );
     }
 }

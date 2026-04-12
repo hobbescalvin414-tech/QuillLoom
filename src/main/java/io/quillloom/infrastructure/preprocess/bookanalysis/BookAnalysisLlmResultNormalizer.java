@@ -26,13 +26,15 @@ public class BookAnalysisLlmResultNormalizer {
 
     public BookAnalysisLlmResult normalize(BookAnalysisTaskInput input, BookAnalysisLlmResult rawResult) {
         String fallbackSynopsis = summarize(input.sourceText(), 180);
+        List<RejectedGlobalConstraintTracePayload> rejectedConstraints = new ArrayList<>();
         return new BookAnalysisLlmResult(
                 normalizeText(rawResult == null ? null : rawResult.synopsis(), fallbackSynopsis),
                 normalizeText(rawResult == null ? null : rawResult.narrativeOutline(), "当前未提取到可靠的全书叙事结构，请在后续阶段补充校验。"),
                 normalizeText(rawResult == null ? null : rawResult.styleProfile(), "保持忠实、可审阅、不过度定稿的小说初稿风格。"),
                 normalizeTexts(rawResult == null ? null : rawResult.globalRisks()),
                 normalizeTexts(rawResult == null ? null : rawResult.translationStrategyNotes()),
-                normalizeConstraints(rawResult == null ? null : rawResult.globalConstraints())
+                normalizeConstraints(rawResult == null ? null : rawResult.globalConstraints(), rejectedConstraints),
+                List.copyOf(rejectedConstraints)
         );
     }
 
@@ -50,7 +52,8 @@ public class BookAnalysisLlmResultNormalizer {
         return List.copyOf(normalized);
     }
 
-    private List<BookAnalysisLlmConstraint> normalizeConstraints(List<BookAnalysisLlmConstraint> values) {
+    private List<BookAnalysisLlmConstraint> normalizeConstraints(List<BookAnalysisLlmConstraint> values,
+                                                                 List<RejectedGlobalConstraintTracePayload> rejectedConstraints) {
         if (values == null || values.isEmpty()) {
             return List.of();
         }
@@ -62,7 +65,9 @@ public class BookAnalysisLlmResultNormalizer {
             if (description.isBlank()) {
                 continue;
             }
-            if (!boundaryJudge.judge(type, description).accepted()) {
+            GlobalConstraintBoundaryDecision decision = boundaryJudge.judge(type, description);
+            if (!decision.accepted()) {
+                rejectedConstraints.add(new RejectedGlobalConstraintTracePayload(type, description, decision.reasonCode()));
                 continue;
             }
             String signature = type + "::" + description;

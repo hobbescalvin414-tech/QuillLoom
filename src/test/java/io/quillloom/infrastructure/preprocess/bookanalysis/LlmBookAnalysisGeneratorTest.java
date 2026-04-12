@@ -4,6 +4,7 @@ import io.quillloom.application.preprocess.model.BookAnalysisTaskInput;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -48,10 +49,11 @@ class LlmBookAnalysisGeneratorTest {
         assertEquals(1, result.globalConstraints().size());
         assertEquals("style", result.globalConstraints().get(0).type());
         assertEquals("保持人名与语体一致", result.globalConstraints().get(0).description());
+        assertEquals(List.of(), result.tracePayload().get("rejectedGlobalConstraints"));
     }
 
     @Test
-    void shouldFilterIllegalGlobalConstraintsBeforeParsing() {
+    void shouldExposeRejectedGlobalConstraintsInTracePayload() {
         BookAnalysisTaskInput input = new BookAnalysisTaskInput(
                 "project-1",
                 "示例小说",
@@ -81,5 +83,10 @@ class LlmBookAnalysisGeneratorTest {
 
         assertEquals(1, result.globalConstraints().size());
         assertEquals("全书命名应保持一致，未确认译名不要在不同 chunk 之间随意漂移", result.globalConstraints().get(0).description());
+        assertTrue(result.tracePayload().containsKey("acceptedGlobalConstraints"));
+        assertTrue(result.tracePayload().containsKey("rejectedGlobalConstraints"));
+        assertEquals(1, ((List<?>) result.tracePayload().get("rejectedGlobalConstraints")).size());
+        Map<?, ?> rejected = (Map<?, ?>) ((List<?>) result.tracePayload().get("rejectedGlobalConstraints")).get(0);
+        assertEquals("entity-level-do-not-translate", rejected.get("reasonCode"));
     }
 }
