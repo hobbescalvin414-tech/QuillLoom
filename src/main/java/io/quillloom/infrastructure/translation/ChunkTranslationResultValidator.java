@@ -29,7 +29,8 @@ public class ChunkTranslationResultValidator {
             "style",
             "context",
             "confirmed-term-conflict",
-            "text-boundary-warning"
+            "text-boundary-warning",
+            "glossary-compliance-warning"
     );
 
     private static final Set<String> ALLOWED_LOOKUP_REASONS = Set.of(
@@ -93,19 +94,27 @@ public class ChunkTranslationResultValidator {
     );
 
     private final TranslatedTextIssueDetector translatedTextIssueDetector;
+    private final GlossaryComplianceIssueDetector glossaryComplianceIssueDetector;
 
     public ChunkTranslationResultValidator() {
-        this(new TranslatedTextIssueDetector());
+        this(new TranslatedTextIssueDetector(), new GlossaryComplianceIssueDetector());
     }
 
     public ChunkTranslationResultValidator(TranslatedTextIssueDetector translatedTextIssueDetector) {
+        this(translatedTextIssueDetector, new GlossaryComplianceIssueDetector());
+    }
+
+    public ChunkTranslationResultValidator(TranslatedTextIssueDetector translatedTextIssueDetector,
+                                           GlossaryComplianceIssueDetector glossaryComplianceIssueDetector) {
         this.translatedTextIssueDetector = translatedTextIssueDetector;
+        this.glossaryComplianceIssueDetector = glossaryComplianceIssueDetector;
     }
 
     public ChunkTranslationLlmResult validate(TranslationTaskInput input, ChunkTranslationLlmResult result) {
         Map<String, String> existingConfirmedTerms = input.executionContextView().confirmedTerms();
         List<ChunkTranslationDecisionNoteResult> decisionNotes = sanitizeDecisionNotes(result.decisionNotes());
         decisionNotes.addAll(sanitizeTextBoundaryWarnings(input.sourceMaterial().project().targetLanguage(), result.translatedText()));
+        decisionNotes.addAll(glossaryComplianceIssueDetector.detect(existingConfirmedTerms, result.translatedText()));
         Map<String, ConfirmedTermUpdateResult> allowedConfirmedUpdates = new LinkedHashMap<>();
 
         for (ConfirmedTermUpdateResult update : safeList(result.confirmedTermUpdates())) {
