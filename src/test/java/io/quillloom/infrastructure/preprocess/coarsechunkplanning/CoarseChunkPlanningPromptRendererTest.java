@@ -28,7 +28,7 @@ class CoarseChunkPlanningPromptRendererTest {
     }
 
     @Test
-    void shouldInstructModelToPreferLargerCoarseBlocksForNormalNarrative() {
+    void shouldBiasCoarsePlanningTowardFewerLargerBlocksWithoutOverShortSummaries() {
         CoarseChunkPlanningTaskInput input = new CoarseChunkPlanningTaskInput(
                 "project-2",
                 "narrative-sample",
@@ -39,9 +39,14 @@ class CoarseChunkPlanningPromptRendererTest {
 
         String prompt = new CoarseChunkPlanningPromptRenderer().render(input);
 
-        assertTrue(prompt.contains("粗分块默认要尽量大"));
+        assertTrue(prompt.contains("粗分块默认要明显偏大"));
+        assertTrue(prompt.contains("优先减少 coarse block 数量"));
+        assertTrue(prompt.contains("宁可少切，也不要把整本书切成很长的 coarse block 列表"));
         assertTrue(prompt.contains("不能仅因为换段就切"));
-        assertTrue(prompt.contains("block 数量宁少勿多"));
-        assertTrue(prompt.contains("只有明确属于结构性短片段时，才允许单段独立成块"));
+        assertTrue(prompt.contains("summary 是该粗块的简短概括"));
+        assertTrue(prompt.contains("1 句完整概括"));
+        assertTrue(prompt.contains("20 到 80 个中文字符"));
+        assertTrue(prompt.contains("不能短到只剩标签词"));
+        assertTrue(prompt.contains("boundaryHint 说明为什么在这里切，但要简洁"));
     }
 }
