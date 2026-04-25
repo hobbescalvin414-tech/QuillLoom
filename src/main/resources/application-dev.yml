@@ -1,0 +1,157 @@
+spring:
+  application:
+    name: quillloom
+
+server:
+  port: 8080
+
+quillloom:
+  post-draft-review-package:
+    storage: postgres
+  postdraft:
+    review:
+      runtime:
+        baseline-directory: "target/review-agent-baselines"
+        console-preview-max-length: 0
+        max-wall-clock-minutes: 300
+        prompt-dump-enabled: true
+        prompt-dump-directory: "logs/review-agent-prompts"
+      llm:
+        enabled: true
+        base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+        model-name: "qwen-plus"
+        log-requests: false
+        log-responses: false
+        timeout-seconds: 180
+        max-retries: 2
+        retry-backoff: 1s
+        retry-max-backoff: 8s
+        retry-backoff-multiplier: 2.0
+        retry-jitter-factor: 0.2
+  preprocess:
+    knowledge-base:
+      storage: postgres
+      postgres:
+        url: jdbc:postgresql://localhost:5432/robot
+        username: postgres
+        password: postgres
+        schema: public
+        initialize-schema: true
+      embedding:
+        enabled: true
+        base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+        model-name: "text-embedding-v4"
+        log-requests: false
+        log-responses: false
+        timeout-seconds: 60
+      retrieval:
+        assembly:
+          direct-chunk-match-weight: 100
+          exact-anchor-match-weight: 40
+          query-anchor-weight: 12
+          query-keyword-weight: 8
+          title-text-weight: 6
+          content-text-weight: 4
+          anchor-hint-weight: 10
+          anchor-title-weight: 5
+          preferred-type-weight: 16
+          vector-similarity-scale: 30
+          vector-preferred-type-bonus: 8
+          vector-direct-chunk-bonus: 12
+          vector-recall-multiplier: 3
+          default-limit: 6
+          default-per-type-limit: 2
+        supplemental-lookup:
+          direct-chunk-match-weight: 60
+          exact-anchor-match-weight: 10
+          query-anchor-weight: 14
+          query-keyword-weight: 10
+          title-text-weight: 6
+          content-text-weight: 4
+          anchor-hint-weight: 12
+          anchor-title-weight: 6
+          preferred-type-weight: 18
+          vector-similarity-scale: 34
+          vector-preferred-type-bonus: 10
+          vector-direct-chunk-bonus: 8
+          vector-recall-multiplier: 4
+          default-limit: 3
+          default-per-type-limit: 3
+    book-analysis:
+      llm:
+        enabled: true
+        base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+        model-name: "qwen-plus"
+        log-requests: false
+        log-responses: false
+    coarse-chunk-planning:
+      llm:
+        enabled: true
+        base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+        model-name: "qwen-plus"
+        log-requests: false
+        log-responses: false
+    chunk-segmentation:
+      llm:
+        enabled: true
+        base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+        model-name: "qwen-plus"
+        log-requests: false
+        log-responses: false
+    chunk-annotation:
+      llm:
+        enabled: true
+        base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+        model-name: "qwen-plus"
+        log-requests: false
+        log-responses: false
+    knowledge-search:
+      planner:
+        llm:
+          enabled: true
+          base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+          api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+          model-name: "qwen-plus"
+          log-requests: false
+          log-responses: false
+      gate:
+        enabled: true
+        max-queries-per-chunk: 6
+        require-background-signal: true
+        skip-when-covered-by-knowledge-base: true
+      searxng:
+        enabled: true
+        base-url: "http://localhost:10000/search"
+        format: "json"
+        language: "zh-CN"
+        categories: []
+        engines: []
+        page-no: 1
+        max-results: 3
+        api-key: ""
+        api-key-header-name: "Authorization"
+        api-key-prefix: "Bearer "
+        timeout-seconds: 20
+      organizer:
+        llm:
+          enabled: true
+          base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+          api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+          model-name: "qwen-plus"
+          log-requests: false
+          log-responses: false
+  translation:
+    chunk-translation:
+      llm:
+        enabled: true
+        base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        api-key: "sk-e8fad4eb8bce4390ad9d6cc40536f335"
+        model-name: "qwen-plus"
+        log-requests: false
+        log-responses: false

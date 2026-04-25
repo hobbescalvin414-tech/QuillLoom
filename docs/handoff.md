@@ -166,3 +166,178 @@
    - proposal structured / proposal replan exhaustion -> `RecordConfirmedTermsProposalException`
    - proposal assembly exhaustion -> `RecordConfirmedTermsAssemblyException`
 6. Legacy one-phase `[entries repair]` guidance is no longer the repair path for two-phase proposal handling; if stage A still directly emits invalid `record_confirmed_terms` decisions, entries compatibility repair may remain in narrowed form there until that error surface is removed from the main contract.
+
+## 2026-04-22 Review Agent Context / Prompt Refactor Notes
+1. Current code does not yet implement `read_previous_chunks` / `read_next_chunks` as working-set-boundary expansion.
+2. The concrete mismatch is in `ReviewToolExecutor.executeReadAdjacent(...)`, which still reads around `session.focus().chunkId()`.
+3. Canonical chunk order already exists in reader-side package ordering:
+   - primary key: `PostDraftChunkRecord.sequence`
+   - tie-breaker: `chunkId`
+4. `ReviewEvidenceBundle` is currently carrying both summary memory and high-fidelity read-chunk text in string form; this is the main context-layering fault.
+5. `InvestigationPromptBuilder`, `EvaluationPromptBuilder`, `RevisionPromptBuilder`, and `RevisionSelfCheckPromptBuilder` currently do not inject a stable working-set fulltext section.
+6. `WorkingSetCompletionHandler` currently enforces only:
+   - focus chunk included
+   - submitted chunkIds stay inside current workingSet
+   - submitted chunkIds remain pending
+7. Therefore ¡°other submitted chunks were actually read and verified this round¡± is not currently an execution-level guarantee and must be addressed explicitly in the refactor plan.
+8. Phase C should stay constrained to cross-focus review-summary inheritance, not a general long-term memory system.
+
+## 2026-04-22 Multi-Chunk Completion Enforcement Decision
+1. This design is now locked: `complete_working_set` must enforce, at execution level, that any extra non-focus chunk submitted in the same round was actually read and explicitly verified in that round.
+2. Prompt-side wording is still required, but no longer considered sufficient protection.
+3. Required markers must remain inside review-session/runtime scope and must not be pushed into stable domain contracts.
+
+## 2026-04-22 Review-Agent Scope Clarification
+1. Review-agent work should still stay centered in `application/postdraft/review` and `infrastructure/postdraft/review`.
+2. Narrow companion changes are also allowed in:
+   - `application/postdraft/review/port/out`
+   - `interfaces/api/dto`
+   - `src/test/java/io/quillloom/support`
+   when they are required to preserve human-request propagation, status visibility, or smoke/debug verification.
+3. This is still not permission to spread review-agent refactors into unrelated modules.
+
+## 2026-04-22 `questionForHuman` Contract Clarification
+1. `questionForHuman` is an additive, backward-compatible human-collaboration / diagnostic field extension.
+2. It does not change:
+   - tool-call protocol
+   - required tool arguments
+   - `ReviewAgentStructuredGenerationPort` external contract
+3. It may appear in persisted runtime, status, result, writer, and gateway layers as long as the change remains additive and old stored JSON remains readable.
+4. If any external consumer requires strict schema stability, implementation must carry an explicit compatibility note or versioning decision instead of silently redefining the boundary.
+
+## 2026-04-22 Phase B Status And Next Step
+1. Phase B core structure has been implemented in code:
+   - workingSet fulltext context layering
+   - boundaryWindow-based adjacent expansion
+   - per-focus markers
+   - focus-only conservative completion
+   - persistence / resume compatibility
+   - prompt / human-request / dump wiring
+2. Current remaining issue is behavioral, not structural: the agent is still not proactive enough about reading adjacent context in investigation.
+3. Therefore the next priority is not Phase C yet.
+4. The next priority is prompt-side reinforcement for adjacent-context reading behavior:
+   - strengthen investigation/system prompt rules for continuity-dependent scenes
+   - reduce premature evaluate_focus / complete_working_set when adjacent context is still missing
+5. Phase C stays deferred until this prompt-behavior follow-up is validated.
+
+## 2026-04-23 Phase B9 Prompt Follow-up Additions
+1. B9 also includes fixing mojibake / broken text in the evaluation system prompt inside `PromptBackedStrategyEvaluationService`.
+2. This is treated as a Phase B prompt-quality bug, not a separate redesign task, because corrupted evaluation prompt text directly pollutes strategy selection quality.
+3. B9 must also harden the prompt rule that:
+   - if current strategy is `LIGHT_EDIT` / `DEEP_EDIT` / `RETRANSLATE`
+   - and the current focus has not yet successfully finished `draft_revision` plus self-check
+   - the agent must not go directly to `complete_working_set`
+4. The intent is prompt-side consistency: do not allow a decision whose reason admits revision is needed while the chosen action directly completes the chunk.
+
+## 2026-04-23 Review-Agent LLM Transport Containment Follow-up
+1. Phase B follow-up also includes transport-failure containment for review-agent LLM calls.
+2. `GOAWAY received`, HTTP/2 shutdown, and similar `IOException` transport failures should be treated as transient transport failures when appropriate and enter bounded retry.
+3. Even when a transport exception is not successfully classified as transient, the review-agent path must still prefer runtime containment (`LLM_CALL_FAILED` / persisted stop state) over crashing the whole Spring CLI process with an uncaught top-level `RuntimeException`.
+4. This is not permission to hide failures. The requirement is controlled retry or controlled runtime stop with diagnostics, not silent fallback.
+
+## 2026-04-23 B9 Clarifications
+1. The investigation prompt should expose objective adjacent-context state only:
+   - boundaryWindow left/right chunk ids
+   - anchorOnlyView
+   - hasPreviousRead
+   - hasNextRead
+   - adjacentReadCount
+   It should not expose a code-side boolean claiming continuity evidence is already sufficient.
+2. Prompt-side completion gating must use one explicit positive signal only:
+   - `selfCheckPassed=true`
+   - or equivalent `revision_ready_for_completion`
+   Strategy alone is never enough to justify `complete_working_set`.
+3. Transport containment has one fixed fallback boundary:
+   - transport/client layer classifies transient failures first
+   - anything not classified or not retried successfully must be contained at runtime orchestrator level as `LLM_CALL_FAILED`
+   - this applies to next-step, evaluation, revision draft, and revision self-check paths
+
+## 2026-04-23 B10 Project Completion Follow-up
+1. B10 remains intentionally narrow.
+2. The runtime already knows project-level progress through pendingChunkIds and completedChunkOutcomes; the remaining problem is exposing that state clearly enough and ending the project once no chunk remains pending.
+3. B10 should expose only:
+   - pendingChunkCount
+   - completedChunkCount
+   - currentFocusChunkStillPending
+4. pending-empty auto-close is allowed only for ACTIVE runtime endgame.
+5. pendingChunkIds being empty is necessary but not sufficient; blocking backlog or non-ACTIVE stop contexts must still block auto-completion.
+6. Ordinary investigation/evaluation/revision failure must not be auto-converted into completed.
+
+## 2026-04-23 Prompt Refactor Design Guardrails
+1. Prompt refactor should use one normative-source rule:
+   - system prompt owns only cross-stage constant rules
+   - investigation prompt owns only current-round decision gates derived from runtime facts
+   - stage-specific prompts must not restate next-step gate rules as full normative text
+   - explanatory appendices are non-normative and must not become a second source of truth
+2. Review-agent stage progression is constrained but not a hard state machine:
+   - next-step remains the only tool-selection entry
+   - evaluation only outputs strategy and evidence sufficiency
+   - revision only outputs draft
+   - self-check only outputs readiness signal
+   - completion is still chosen by next-step, not auto-triggered by downstream stages
+3. Prompt compression must not weaken the format-defense chain:
+   - JSON/schema shape
+   - validator checks
+   - repair prompts
+   - runtime containment
+   remain separate required layers
+4. Prompt refactor must stay compatible with the current memory mechanism:
+   - reuse existing workingSetContext, evidence summaries, transcript, gaps, and local failures
+   - do not introduce new persisted memory types or change persistence/resume/compact contracts only to support prompt layering
+
+## 2026-04-24 Prompt Refactor Follow-up Clarifications
+1. ecord_confirmed_terms keeps its current narrow two-phase special path:
+   - next-step selects the tool
+   - proposal generation / proposal repair / assembly / proposal NOT_APPLICABLE local replan remain tool-local subflow only
+   - this must not be generalized into a new global proposal phase
+2. The evidence-closure appendix in the prompt-refactor spec is explanatory only, but it must still map back into investigation prompt decision-gate text:
+   - each major review dimension should contribute at least 1-2 executable gate lines
+   - the appendix must not become a second normative source
+3. Prompt compression must preserve minimal semantic schema hints for high-risk tools:
+   - ecord_confirmed_terms
+   - equest_human_review
+   - complete_working_set
+   - complete_project
+   Shape-only schema wording is not sufficient for these tools.
+
+## 2026-04-25 Review-Agent Console Visualization Refactor Guardrails
+1. Console visualization refactor should stay presentation-only:
+   - improve trace readability
+   - do not become a new router / planner / orchestrator
+2. The next priority is not a TUI or web UI.
+3. The key missing observability units are:
+   - focus round
+   - action/result pairing
+   - repair / replan / containable-failure visibility
+4. Showing the agent's "thinking" means showing:
+   - decision reason summary
+   - current stage / gate state
+   - chosen tool and result
+   not exposing raw chain-of-thought.
+## 2026-04-25 Prompt Template Canonicalization
+1. The prompt-refactor spec now contains Chinese module-level prompt templates for system / investigation / evaluation / revision / self-check / repair.
+2. These Chinese templates are the canonical semantic baseline for implementation.
+3. Code may use English prompt text, but only as faithful translation:
+   - do not add new governance rules
+   - do not drop required constraints
+   - do not reshuffle layer ownership
+4. If implementation wording conflicts with the spec templates, the spec semantics win.
+## 2026-04-25 Console Visualization Follow-up Guardrails
+1. High-level visualization events must be emitted only by AutonomousProjectReviewAgent.
+2. PromptBackedNextStepDecisionProvider and other lower-level services must not gain direct visualizer dependencies.
+3. If lower layers need to expose repair / proposal / rejection / local replan details, they should return them through results, exceptions, processTrail, or read-only diagnostics for the agent to visualize.
+4. Round semantics are fixed to ProjectReviewRuntimeSession.currentFocusRound.
+5. Repair / proposal / local replan stay attached under the current round and must not be shown as a new focus round.
+6. Console output should have explicit OFF / COMPACT / TRACE modes; default service wiring should use OFF or COMPACT.
+## 2026-04-25 Console Visualization Final Narrowing
+1. For visualization-related repair / proposal / local replan details, implementation should prefer existing carriers in this order:
+   - ReviewToolExecutionResult
+   - ProjectReviewRuntimeSession.processTrail
+   - classified exception types
+2. Only if those existing carriers cannot stably express the needed information may the implementation add an agent-private read-only trace/diagnostics DTO.
+3. Such DTOs must not enter persistence, resume payloads, or external protocols.
+4. Output mode minimum sets are now fixed:
+   - COMPACT: project_started, focus_selected, decision/action summary, toolCompleted/result summary, humanReviewRequested, terminal failure, project_finished
+   - TRACE: round start/finish, gate summary, detailed action/result blocks, repair blocks, proposal special path, containable-failure blocks
+5. COMPACT must not show round sub-blocks or repair/proposal sub-blocks by default.
+6. TRACE must not blindly duplicate the full legacy single-line event stream.

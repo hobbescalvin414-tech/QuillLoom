@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -258,7 +259,7 @@ public class ToolDrivenKnowledgeEnricher implements KnowledgeEnricher {
                 .replaceAll("[^a-zA-Z0-9\\u4e00-\\u9fa5]+", "-")
                 .replaceAll("-+", "-")
                 .replaceAll("^-|-$", "")
-                .toLowerCase();
+                .toLowerCase(Locale.ROOT);
         return "kc-intrinsic-" + normalized;
     }
 
@@ -278,7 +279,7 @@ public class ToolDrivenKnowledgeEnricher implements KnowledgeEnricher {
                 .replaceAll("[^a-zA-Z0-9\\u4e00-\\u9fa5]+", "-")
                 .replaceAll("-+", "-")
                 .replaceAll("^-|-$", "")
-                .toLowerCase();
+                .toLowerCase(Locale.ROOT);
         return "kc-" + chunk.chunk().chunkId() + "-" + normalized;
     }
 

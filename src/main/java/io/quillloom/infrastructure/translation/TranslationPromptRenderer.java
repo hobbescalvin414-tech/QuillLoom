@@ -4,6 +4,8 @@ import io.quillloom.domain.knowledge.KnowledgeCard;
 import io.quillloom.domain.memory.CoarseBlockContext;
 import io.quillloom.domain.memory.LocalSourceContext;
 import io.quillloom.domain.preprocess.PersonAliasHint;
+import io.quillloom.application.translation.model.ConfirmedTermConflict;
+import io.quillloom.domain.translation.ChunkTranslationDraft;
 import io.quillloom.domain.translation.TranslationCandidateUpdate;
 import io.quillloom.domain.translation.TranslationTaskInput;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,8 +49,14 @@ public class TranslationPromptRenderer {
 
         builder.append("【本轮要求】\n");
         appendConfiguredInstructions(builder, properties.getDraftRound().getCoreInstructions());
+        builder.append("- D 初稿必须先执行 DraftStageGlobalGlossary 与 GlobalAliasConsistencyTable，不要把知识卡原料直接当稳定规则表。\n");
+        builder.append("- 执行顺序：先执行 hard entries，再执行 soft entries，再参考 GlobalAliasConsistencyTable。\n");
+        builder.append("- alias 表只消费，不允许回写 alias 事实。\n");
+        builder.append("- 只对表外项写入 confirmedTermUpdates 或 candidateUpdates。\n");
         builder.append("- 当前生效译名表中的译名必须优先沿用，不能改写。\n");
         builder.append("- 对于尚未进入当前生效译名表的人名、地名、称谓、专名，应优先选择一个当前全文先统一沿用的译名，并写入 confirmedTermUpdates。\n");
+        builder.append("- 若某个高频核心人名尚未进入当前生效译名表，本轮无论决定翻成中文还是决定先保留原文，都必须把该决定写入 confirmedTermUpdates；若保留原文，也要登记 sourceTerm => sourceTerm。\n");
+        builder.append("- 不允许正文已经采用了某个稳定叫法，却不把该决定登记进 confirmedTermUpdates。\n");
         builder.append("- 如果同一 source term 还有其他可能译法，其他可能译法继续放入 candidateUpdates，不影响当前生效译名。\n");
         builder.append("- 若当前生效译名与你判断不同，不要覆盖，只能写入 decisionNotes 或 candidateUpdates。\n");
         builder.append("- 正文不得写入知识卡内容、背景解释、括号注或百科式补充。\n");
@@ -94,6 +102,8 @@ public class TranslationPromptRenderer {
         appendConfiguredInstructions(builder, properties.getRevisionRound().getCoreInstructions());
         builder.append("- 本轮不是重翻，不是自由润色，而是按 issue 清单定向修订。\n");
         builder.append("- 优先修正 target-language-purity、active glossary 合规和 text-boundary-warning 相关问题。\n");
+        builder.append("- 若第 1 轮正文仍残留词池中已有对应译法的外文命名，必须在本轮改为沿用词池译名，不允许继续中外文混写。\n");
+        builder.append("- 若第 1 轮遗漏了高频核心人名的首次命名登记，本轮必须补写 confirmedTermUpdates；即使决定保留原文，也要登记 sourceTerm => sourceTerm。\n");
         builder.append("- 若 issue 清单与第 1 轮 decisionNotes 存在冲突，以当前问题清单为准逐项修正。\n");
         builder.append("- 基于第 1 轮结果做修订，不要重写任务目标。\n");
         builder.append("- 优先修正文句不稳、术语不一致、衔接不顺，以及正文边界污染问题。\n");
@@ -105,6 +115,54 @@ public class TranslationPromptRenderer {
         builder.append("- decisionNotes 只保留真正尚未解决的风险和问题。\n");
         builder.append("- transitionNote 只保留前后 chunk 的衔接提示，不要写术语治理或重新切分建议。\n");
         builder.append("- 第 2 轮不要再返回 knowledgeLookupRequest。\n\n");
+
+        appendOutputContract(builder, input, false);
+        return builder.toString();
+    }
+
+    public String renderConfirmedTermConflictRepair(TranslationTaskInput input,
+                                                    ChunkTranslationDraft previousDraft,
+                                                    ConfirmedTermConflict conflict,
+                                                    int attempt) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("你是 QuillLoom 的 Agent D，正在修复当前 chunk 的 confirmed term 冲突。\n");
+        builder.append("当前是 confirmed term conflict repair，第 ").append(attempt).append(" 次修复。\n");
+        builder.append("不要从头重翻，只修复当前 chunk 中与已生效译名冲突的部分。\n\n");
+
+        appendStableInput(builder, input);
+
+        builder.append("【冲突诊断】\n");
+        builder.append("- sourceKey：").append(nullToEmpty(conflict.sourceKey())).append("\n");
+        builder.append("- existingSourceTerm：").append(nullToEmpty(conflict.existingSourceTerm())).append("\n");
+        builder.append("- existingTargetTerm：").append(nullToEmpty(conflict.existingTargetTerm())).append("\n");
+        builder.append("- incomingSourceTerm：").append(nullToEmpty(conflict.incomingSourceTerm())).append("\n");
+        builder.append("- incomingTargetTerm：").append(nullToEmpty(conflict.incomingTargetTerm())).append("\n");
+        builder.append("- evidenceChunkId：").append(nullToEmpty(conflict.evidenceChunkId())).append("\n\n");
+
+        builder.append("【上一轮当前 chunk 输出】\n");
+        builder.append("译文：\n").append(nullToEmpty(previousDraft.translatedText())).append("\n\n");
+        builder.append("translatorCommentary：").append(nullToEmpty(previousDraft.translatorCommentary())).append("\n");
+        builder.append("confirmedTermUpdates：").append(previousDraft.confirmedTermUpdates()).append("\n");
+        builder.append("decisionNotes：").append(previousDraft.decisionNotes()).append("\n\n");
+
+        builder.append("【修复要求】\n");
+        builder.append("- 当前 chunk 正文必须沿用已生效译名：")
+                .append(nullToEmpty(conflict.existingSourceTerm()))
+                .append(" => ")
+                .append(nullToEmpty(conflict.existingTargetTerm()))
+                .append("。\n");
+        builder.append("- confirmedTermUpdates 不得写入冲突译名：")
+                .append(nullToEmpty(conflict.incomingSourceTerm()))
+                .append(" => ")
+                .append(nullToEmpty(conflict.incomingTargetTerm()))
+                .append("。\n");
+        builder.append("- 若仍要登记该术语，只能登记与已生效译名一致的项：")
+                .append(nullToEmpty(conflict.existingSourceTerm()))
+                .append(" => ")
+                .append(nullToEmpty(conflict.existingTargetTerm()))
+                .append("。\n");
+        builder.append("- translatorCommentary / decisionNotes 必须同步说明沿用既有译名，不要继续推荐冲突译名。\n");
+        builder.append("- 只修复当前 chunk，不修改前后 chunk，不新增全局替换计划。\n\n");
 
         appendOutputContract(builder, input, false);
         return builder.toString();
@@ -147,6 +205,8 @@ public class TranslationPromptRenderer {
         builder.append("【当前生效译名表】\n");
         appendConfirmedTerms(builder, input.executionContextView().confirmedTerms());
         appendProjectCandidateTerms(builder, input.executionContextView().candidateTermUpdates());
+        appendDraftStageGlobalGlossary(builder, input);
+        appendGlobalAliasConsistencyTable(builder, input);
         appendPersonAliasHints(builder, input.sourceMaterial().chunk().personAliasHints());
         appendList(builder, "连续性提示", input.executionContextView().continuityNotes(), 8);
         builder.append("全局约束：\n");
@@ -299,6 +359,45 @@ public class TranslationPromptRenderer {
         }
         confirmedTerms.forEach((source, translated) ->
                 builder.append("- ").append(nullToEmpty(source)).append(" => ").append(nullToEmpty(translated)).append("\n"));
+    }
+
+    private void appendDraftStageGlobalGlossary(StringBuilder builder, TranslationTaskInput input) {
+        builder.append("DraftStageGlobalGlossary:\n");
+        builder.append("- 执行规则：先执行 hard entries，再执行 soft entries。\n");
+        if (input.executionContextView().draftStageGlobalGlossary().hardEntries().isEmpty()
+                && input.executionContextView().draftStageGlobalGlossary().softEntries().isEmpty()) {
+            builder.append("- 无\n");
+            return;
+        }
+        input.executionContextView().draftStageGlobalGlossary().hardEntries().forEach(entry ->
+                builder.append("- HARD ")
+                        .append(nullToEmpty(entry.sourceTerm()))
+                        .append(" => ")
+                        .append(nullToEmpty(entry.targetTerm()))
+                        .append("\n"));
+        input.executionContextView().draftStageGlobalGlossary().softEntries().forEach(entry ->
+                builder.append("- SOFT ")
+                        .append(nullToEmpty(entry.sourceTerm()))
+                        .append(" => ")
+                        .append(nullToEmpty(entry.targetTerm()))
+                        .append("\n"));
+    }
+
+    private void appendGlobalAliasConsistencyTable(StringBuilder builder, TranslationTaskInput input) {
+        builder.append("GlobalAliasConsistencyTable:\n");
+        builder.append("- alias 表只消费，不允许回写。\n");
+        if (input.executionContextView().globalAliasConsistencyTable().clusters().isEmpty()) {
+            builder.append("- 无\n");
+            return;
+        }
+        input.executionContextView().globalAliasConsistencyTable().clusters().forEach(cluster ->
+                builder.append("- ")
+                        .append(String.join(" / ", cluster.surfaceForms()))
+                        .append(" | state=")
+                        .append(cluster.aliasState().name())
+                        .append(" | confidence=")
+                        .append(nullToEmpty(cluster.confidence()))
+                        .append("\n"));
     }
 
     private void appendProjectCandidateTerms(StringBuilder builder,

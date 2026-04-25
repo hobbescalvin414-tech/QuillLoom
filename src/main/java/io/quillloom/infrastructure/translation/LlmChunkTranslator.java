@@ -1,6 +1,7 @@
 package io.quillloom.infrastructure.translation;
 
-import io.quillloom.application.translation.port.out.ChunkTranslator;
+import io.quillloom.application.translation.model.ConfirmedTermConflict;
+import io.quillloom.application.translation.port.out.ConfirmedTermConflictRepairingChunkTranslator;
 import io.quillloom.application.translation.port.out.LocalKnowledgeLookupService;
 import io.quillloom.application.translation.runtime.KnowledgeCardLookupRequest;
 import io.quillloom.application.translation.runtime.KnowledgeCardLookupResponse;
@@ -21,7 +22,7 @@ import java.util.Locale;
 import java.util.Map;
 
 @Component
-public class LlmChunkTranslator implements ChunkTranslator {
+public class LlmChunkTranslator implements ConfirmedTermConflictRepairingChunkTranslator {
 
     private static final String REVISION_ROUND_FALLBACK_TYPE = "revision-round-fallback";
 
@@ -101,6 +102,16 @@ public class LlmChunkTranslator implements ChunkTranslator {
         return draft;
     }
 
+    @Override
+    public ChunkTranslationDraft repairConfirmedTermConflict(TranslationTaskInput input,
+                                                             ChunkTranslationDraft previousDraft,
+                                                             ConfirmedTermConflict conflict,
+                                                             int attempt) {
+        String prompt = promptRenderer.renderConfirmedTermConflictRepair(input, previousDraft, conflict, attempt);
+        ChunkTranslationLlmResult repairedResult = executeRound(input, prompt, "confirmed-term-conflict-repair-" + attempt);
+        return resultParser.parse(input, repairedResult);
+    }
+
     private ChunkTranslationLlmResult executeRound(TranslationTaskInput input, String prompt, String roundLabel) {
         traceRecorder.record(WorkflowStage.CHUNK_TRANSLATION, "chunk_translation_prompt_rendered", WorkflowEventStatus.SUCCEEDED, input.sourceMaterial().chunk().chunk().coarseBlockId(), input.sourceMaterial().chunk().chunk().chunkId(), Map.of("round", roundLabel, "prompt", Map.of("text", prompt)));
         LlmChunkTranslationClientResponse response = llmClient.generateDetailed(prompt);
@@ -120,7 +131,7 @@ public class LlmChunkTranslator implements ChunkTranslator {
             );
             String prompt = promptRenderer.renderRevisionRound(input, draftRoundResult, textIssues) + renderSupplementalKnowledgePrompt(lookupResponse);
             return executeRound(input, prompt, "revision");
-        } catch (RuntimeException exception) {
+        } catch (ChunkTranslationStructuredOutputException exception) {
             return markRevisionRoundFallback(draftRoundResult, exception);
         }
     }

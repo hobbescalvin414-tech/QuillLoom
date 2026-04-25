@@ -35,6 +35,16 @@ class ChunkAnnotationPromptRendererTest {
         assertTrue(prompt.contains("避免把一整段翻译分析塞进 summary 或 translationRisks"));
     }
 
+    @Test
+    void shouldAskForBroadEntityCoverageAndTranslationConsistencyRisks() {
+        String prompt = new ChunkAnnotationPromptRenderer().render(createTaskInput());
+
+        assertTrue(prompt.contains("尽量覆盖人名、地名、场所名、店名、机构名、称谓和反复出现的专名"));
+        assertTrue(prompt.contains("缺少稳定译名"));
+        assertTrue(prompt.contains("需要统一译名"));
+        assertTrue(prompt.contains("不要因为暂时无法确认译名就漏掉实体"));
+    }
+
     private ChunkAnnotationTaskInput createTaskInput() {
         PreprocessBookCommand command = new PreprocessBookCommand(
                 "project-1",

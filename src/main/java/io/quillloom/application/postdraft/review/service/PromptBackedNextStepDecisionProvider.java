@@ -1,6 +1,7 @@
 package io.quillloom.application.postdraft.review.service;
 
 import io.quillloom.application.postdraft.review.model.PostDraftReviewSession;
+import io.quillloom.application.postdraft.review.model.ProjectReviewRuntimeSession;
 import io.quillloom.application.postdraft.review.model.RecordConfirmedTermEntry;
 import io.quillloom.application.postdraft.review.model.RecordConfirmedTermsProposal;
 import io.quillloom.application.postdraft.review.model.ReviewToolDecision;
@@ -31,6 +32,7 @@ public class PromptBackedNextStepDecisionProvider {
     private final ReviewAgentStructuredGenerationPort generationPort;
     private final ReviewToolDecisionContractValidator contractValidator;
     private final ReviewAgentPromptDumpWriter promptDumpWriter;
+    private final ThreadLocal<InvestigationPromptBuilder.PromptProjectState> runtimePromptState = new ThreadLocal<>();
 
     public PromptBackedNextStepDecisionProvider(InvestigationPromptBuilder promptBuilder,
                                                 ReviewToolRegistry toolRegistry,
@@ -85,7 +87,12 @@ public class PromptBackedNextStepDecisionProvider {
     public ReviewToolDecision decide(PostDraftReviewSession session) {
         Objects.requireNonNull(session, "session");
         String systemPrompt = systemPromptBuilder.build(toolRegistry.definitions());
-        String originalInvestigationPrompt = promptBuilder.build(session, toolRegistry.definitions(), session.evidenceSummaries());
+        String originalInvestigationPrompt = promptBuilder.build(
+                session,
+                toolRegistry.definitions(),
+                session.evidenceSummaries(),
+                currentPromptProjectState()
+        );
         RepairLoopState state = RepairLoopState.start(systemPrompt, originalInvestigationPrompt);
         dumpPrompt(session, systemPrompt, state.userPrompt(), state.promptKind(), 0, null, null, null, null, null, "PromptCapture");
 
@@ -97,6 +104,20 @@ public class PromptBackedNextStepDecisionProvider {
             }
             state = outcome.nextState();
             repairsUsed = outcome.repairsUsed();
+        }
+    }
+
+    public ReviewToolDecision decide(ProjectReviewRuntimeSession runtime, PostDraftReviewSession session) {
+        Objects.requireNonNull(runtime, "runtime");
+        runtimePromptState.set(new InvestigationPromptBuilder.PromptProjectState(
+                runtime.pendingChunkCount(),
+                runtime.completedChunkCount(),
+                runtime.currentFocusChunkStillPending()
+        ));
+        try {
+            return decide(session);
+        } finally {
+            runtimePromptState.remove();
         }
     }
 
@@ -372,6 +393,16 @@ public class PromptBackedNextStepDecisionProvider {
                 promptKind,
                 attempt,
                 session.focus().chunkId(),
+                session.workingSet().chunkIds().toString(),
+                session.workingSetContext().snapshots().stream()
+                        .map(io.quillloom.application.postdraft.review.model.ReviewContextChunkSnapshot::chunkId)
+                        .toList()
+                        .toString(),
+                session.workingSetContext().snapshots().stream()
+                        .map(snapshot -> snapshot.chunkId() + ":" + classifySnapshotSource(session, snapshot.chunkId(), snapshot.anchor()))
+                        .toList()
+                        .toString(),
+                0,
                 toolName,
                 validationError,
                 errorMessage,
@@ -381,6 +412,18 @@ public class PromptBackedNextStepDecisionProvider {
                 systemPrompt,
                 userPrompt
         ));
+    }
+
+    private String classifySnapshotSource(PostDraftReviewSession session,
+                                          String chunkId,
+                                          boolean anchor) {
+        if (anchor) {
+            return "anchor";
+        }
+        if (session.boundaryWindow().snapshots().stream().anyMatch(snapshot -> snapshot.chunkId().equals(chunkId))) {
+            return "boundary_expansion";
+        }
+        return "block_expansion";
     }
 
     private boolean isRepairableStructuredOutputError(LlmStructuredOutputException ex) {
@@ -469,7 +512,12 @@ public class PromptBackedNextStepDecisionProvider {
 
     private String buildRecordConfirmedTermsProposalPrompt(PostDraftReviewSession session,
                                                            List<RecordConfirmedTermEntry> stablePairSignals) {
-        String originalPrompt = promptBuilder.build(session, toolRegistry.definitions(), session.evidenceSummaries());
+        String originalPrompt = promptBuilder.build(
+                session,
+                toolRegistry.definitions(),
+                session.evidenceSummaries(),
+                currentPromptProjectState()
+        );
         String signalText = stablePairSignals.stream()
                 .map(entry -> "- " + entry.sourceTerm() + " -> " + entry.targetTerm())
                 .reduce((a, b) -> a + "\n" + b)
@@ -493,6 +541,14 @@ public class PromptBackedNextStepDecisionProvider {
                 Current stable pair signals:
                 %s
                 """.formatted(signalText);
+    }
+
+    private InvestigationPromptBuilder.PromptProjectState currentPromptProjectState() {
+        InvestigationPromptBuilder.PromptProjectState state = runtimePromptState.get();
+        if (state != null) {
+            return state;
+        }
+        return new InvestigationPromptBuilder.PromptProjectState(-1, -1, true);
     }
 
     private String buildRecordConfirmedTermsProposalRepairPrompt(PostDraftReviewSession session,

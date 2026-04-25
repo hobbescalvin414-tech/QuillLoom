@@ -64,6 +64,8 @@ public class ChunkAnnotationPromptRenderer {
                 .append("\"keyExpressions\":[\"black tide harbor\",\"kept his hood low\"],")
                 .append("\"personAliasHints\":[{\"surfaceForms\":[\"Mike\",\"Mikie\"],\"hintType\":\"same-person-name-variant\",\"confidence\":\"MEDIUM\",\"evidence\":\"同段称呼切换\"}]")
                 .append("}\n");
+        builder.append("补充实体覆盖要求：entities 要尽量覆盖人名、地名、场所名、店名、机构名、称谓和反复出现的专名；不要因为暂时无法确认译名就漏掉实体。\n");
+        builder.append("补充风险标注要求：translationRisks 应标记可能造成译名不一致的实体，例如缺少稳定译名、需要统一译名、首次出现但可能跨 chunk 反复出现。\n");
         return builder.toString();
     }
 

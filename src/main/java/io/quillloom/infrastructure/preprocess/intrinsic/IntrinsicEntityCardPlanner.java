@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 @Component
@@ -111,7 +112,7 @@ public class IntrinsicEntityCardPlanner {
         if (confidence == null || confidence.isBlank()) {
             return "medium";
         }
-        return confidence.trim().toLowerCase();
+        return confidence.trim().toLowerCase(Locale.ROOT);
     }
 
     private <T> List<T> safeValues(List<T> values) {

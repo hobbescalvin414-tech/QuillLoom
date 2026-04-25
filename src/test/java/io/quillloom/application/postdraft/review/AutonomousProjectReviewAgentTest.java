@@ -17,6 +17,7 @@ import io.quillloom.application.postdraft.review.model.RevisionDraft;
 import io.quillloom.application.postdraft.review.model.RevisionMode;
 import io.quillloom.application.postdraft.review.model.RevisionSelfCheckResult;
 import io.quillloom.application.postdraft.review.port.out.LlmStructuredOutputException;
+import io.quillloom.application.postdraft.review.port.out.LlmTransientException;
 import io.quillloom.application.postdraft.review.port.out.PostDraftReviewAgentReader;
 import io.quillloom.application.postdraft.review.port.out.PostDraftReviewAgentTermWriter;
 import io.quillloom.application.postdraft.review.port.out.ReviewAgentStructuredGenerationPort;
@@ -49,6 +50,7 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -59,7 +61,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AutonomousProjectReviewAgentTest {
 
     @Test
-    void shouldExpandFromAnchorToWorkingSetAndCompleteTwoChunks() {
+    void shouldExpandFromAnchorToWorkingSetAndCompleteFocusChunkOnly() {
         InMemoryReader reader = new InMemoryReader(List.of(
                 chunk("chunk-1", "translated-1"),
                 chunk("chunk-2", "translated-2"),
@@ -67,7 +69,7 @@ class AutonomousProjectReviewAgentTest {
         ));
         SequenceGenerationPort generationPort = new SequenceGenerationPort(
                 new ReviewToolDecision("read_next_chunks", Map.of("count", 1), "need more context"),
-                new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-1", "chunk-2")), "done"),
+                new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-1")), "done"),
                 new ReviewToolDecision("request_human_review", Map.of(), "stop after chunk-3")
         );
 
@@ -96,7 +98,15 @@ class AutonomousProjectReviewAgentTest {
                         new PostDraftReviewProcessSummaryAssembler(),
                         new FocusHumanStopPolicy(1, 1)
                 ),
-                ReviewRuntimeVisualizer.noop()
+                ReviewRuntimeVisualizer.noop(),
+                io.quillloom.application.postdraft.review.service.ProjectReviewRuntimePersistenceHook.noop(),
+                new io.quillloom.application.postdraft.review.model.ReviewAgentConfig(
+                        12,
+                        new io.quillloom.application.postdraft.review.model.UsageBudget(12_000),
+                        3,
+                        2,
+                        2
+                )
         );
 
         ProjectReviewRuntimeSession result = agent.run(
@@ -104,10 +114,66 @@ class AutonomousProjectReviewAgentTest {
                 "operator note"
         );
 
-        assertEquals(List.of("chunk-3"), result.pendingChunkIds());
-        assertEquals(2, result.completedChunkOutcomes().size());
+        assertEquals(List.of("chunk-2", "chunk-3"), result.pendingChunkIds());
+        assertEquals(1, result.completedChunkOutcomes().size());
         assertEquals(ReviewAgentState.WAITING_HUMAN, result.state());
         assertTrue(result.humanReviewRequest().isPresent());
+    }
+
+    @Test
+    void shouldKeepExpandingAdjacentReadsFromUpdatedBoundaryWindowAcrossTurns() {
+        InMemoryReader reader = new InMemoryReader(List.of(
+                chunk("chunk-2", 2, "translated-2"),
+                chunk("chunk-3", 3, "translated-3"),
+                chunk("chunk-4", 4, "translated-4")
+        ));
+        SequenceGenerationPort generationPort = new SequenceGenerationPort(
+                new ReviewToolDecision("read_next_chunks", Map.of("count", 1), "need right context"),
+                new ReviewToolDecision("read_next_chunks", Map.of("count", 1), "need one more"),
+                new ReviewToolDecision("request_human_review", Map.of(), "stop")
+        );
+
+        AutonomousProjectReviewAgent agent = new AutonomousProjectReviewAgent(
+                reader,
+                new PostDraftReviewSessionFactory(),
+                new PostDraftReviewProblemClassifier(),
+                new SequenceProjectFocusSelector(),
+                new PromptBackedNextStepDecisionProvider(
+                        new InvestigationPromptBuilder(),
+                        ReviewToolRegistry.defaultRegistry(),
+                        generationPort
+                ),
+                new ReviewToolExecutor(
+                        ReviewToolRegistry.defaultRegistry(),
+                        new ReviewToolGuardrail(),
+                        reader,
+                        PostDraftReviewAgentTermWriter.noop(),
+                        new PromptBackedStrategyEvaluationService(new EvaluationPromptBuilder(), generationPort),
+                        new PostDraftRevisionService(
+                                new PromptBackedRevisionDraftProvider(),
+                                (session, chunk, strategy, draft) -> new RevisionSelfCheckResult(true, "", List.of())
+                        ),
+                        new WorkingSetCompletionHandler(reader, new PostDraftReviewProcessSummaryAssembler()),
+                        new PostDraftReviewProcessSummaryAssembler(),
+                        new FocusHumanStopPolicy(1, 1)
+                ),
+                ReviewRuntimeVisualizer.noop(),
+                io.quillloom.application.postdraft.review.service.ProjectReviewRuntimePersistenceHook.noop(),
+                new io.quillloom.application.postdraft.review.model.ReviewAgentConfig(
+                        12,
+                        new io.quillloom.application.postdraft.review.model.UsageBudget(12_000),
+                        3,
+                        2,
+                        2
+                )
+        );
+
+        agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-2", "chunk-3", "chunk-4")),
+                "operator note"
+        );
+
+        assertEquals(List.of("chunk-2", "chunk-3"), reader.adjacentReadChunkIds);
     }
 
     @Test
@@ -142,7 +208,15 @@ class AutonomousProjectReviewAgentTest {
                         new PostDraftReviewProcessSummaryAssembler(),
                         new FocusHumanStopPolicy(1, 1)
                 ),
-                ReviewRuntimeVisualizer.noop()
+                ReviewRuntimeVisualizer.noop(),
+                io.quillloom.application.postdraft.review.service.ProjectReviewRuntimePersistenceHook.noop(),
+                new io.quillloom.application.postdraft.review.model.ReviewAgentConfig(
+                        12,
+                        new io.quillloom.application.postdraft.review.model.UsageBudget(12_000),
+                        3,
+                        2,
+                        2
+                )
         );
 
         ProjectReviewRuntimeSession result = agent.run(
@@ -153,6 +227,41 @@ class AutonomousProjectReviewAgentTest {
         assertEquals(0, result.pendingChunkIds().size());
         assertEquals(1, result.completedChunkOutcomes().size());
         assertEquals(ReviewAgentState.COMPLETED, result.state());
+    }
+
+    @Test
+    void shouldAutoCompletePendingEmptyActiveRuntimeWithoutBlockingBacklog() {
+        InMemoryReader reader = new InMemoryReader(List.of());
+        SequenceGenerationPort generationPort = new SequenceGenerationPort();
+        AutonomousProjectReviewAgent agent = buildAgent(reader, generationPort);
+
+        ProjectReviewRuntimeSession result = agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of()),
+                "operator note"
+        );
+
+        assertEquals(ReviewAgentState.COMPLETED, result.state());
+        assertEquals(ReviewProjectStopReason.PROJECT_COMPLETED, result.stopReason());
+    }
+
+    @Test
+    void shouldNotAutoCompletePendingEmptyRuntimeWhenBlockingBacklogExists() {
+        InMemoryReader reader = new InMemoryReader(List.of());
+        SequenceGenerationPort generationPort = new SequenceGenerationPort();
+        AutonomousProjectReviewAgent agent = buildAgent(reader, generationPort);
+        ProjectReviewRuntimeSession runtime = ProjectReviewRuntimeSession.initialize("project-1", List.of())
+                .withIssueBacklog(new ProjectIssueBacklog(List.of(
+                        new io.quillloom.application.postdraft.review.model.DeferredReviewIssue(
+                                "issue-1",
+                                "chunk-1",
+                                "blocking failure"
+                        )
+                )));
+
+        ProjectReviewRuntimeSession result = agent.run(runtime, "operator note");
+
+        assertTrue(result.state() != ReviewAgentState.COMPLETED);
+        assertEquals(ReviewProjectStopReason.NO_PROGRESS, result.stopReason());
     }
 
     @Test
@@ -197,7 +306,15 @@ class AutonomousProjectReviewAgentTest {
                         new PostDraftReviewProcessSummaryAssembler(),
                         new FocusHumanStopPolicy(1, 1)
                 ),
-                ReviewRuntimeVisualizer.noop()
+                ReviewRuntimeVisualizer.noop(),
+                io.quillloom.application.postdraft.review.service.ProjectReviewRuntimePersistenceHook.noop(),
+                new io.quillloom.application.postdraft.review.model.ReviewAgentConfig(
+                        12,
+                        new io.quillloom.application.postdraft.review.model.UsageBudget(12_000),
+                        3,
+                        2,
+                        2
+                )
         );
 
         agent.run(
@@ -214,6 +331,134 @@ class AutonomousProjectReviewAgentTest {
         assertTrue(prompt.contains("confirmedTermUpdates={Louki=露姬}"));
         assertFalse(prompt.contains("candidateUpdates"));
         assertTrue(prompt.contains("transitionNote={previousChunkConnection=上一句是动作承接"));
+    }
+
+    @Test
+    void shouldSeedAnchorIntoWorkingSetContextWhenFocusSessionStarts() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", 1, "translated-1")));
+        SequenceGenerationPort generationPort = new SequenceGenerationPort(
+                new ReviewToolDecision("request_human_review", Map.of(), "stop")
+        );
+
+        AutonomousProjectReviewAgent agent = new AutonomousProjectReviewAgent(
+                reader,
+                new PostDraftReviewSessionFactory(),
+                new PostDraftReviewProblemClassifier(),
+                new SequenceProjectFocusSelector(),
+                new PromptBackedNextStepDecisionProvider(
+                        new InvestigationPromptBuilder(),
+                        ReviewToolRegistry.defaultRegistry(),
+                        generationPort
+                ),
+                new ReviewToolExecutor(
+                        ReviewToolRegistry.defaultRegistry(),
+                        new ReviewToolGuardrail(),
+                        reader,
+                        PostDraftReviewAgentTermWriter.noop(),
+                        new PromptBackedStrategyEvaluationService(new EvaluationPromptBuilder(), generationPort),
+                        new PostDraftRevisionService(
+                                new PromptBackedRevisionDraftProvider(),
+                                (session, chunk, strategy, draft) -> new RevisionSelfCheckResult(true, "", List.of())
+                        ),
+                        new WorkingSetCompletionHandler(reader, new PostDraftReviewProcessSummaryAssembler()),
+                        new PostDraftReviewProcessSummaryAssembler(),
+                        new FocusHumanStopPolicy(1, 1)
+                ),
+                ReviewRuntimeVisualizer.noop(),
+                io.quillloom.application.postdraft.review.service.ProjectReviewRuntimePersistenceHook.noop(),
+                new io.quillloom.application.postdraft.review.model.ReviewAgentConfig(
+                        12,
+                        new io.quillloom.application.postdraft.review.model.UsageBudget(12_000),
+                        3,
+                        2,
+                        2
+                )
+        );
+
+        ProjectReviewRuntimeSession result = agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1")),
+                "operator note"
+        );
+
+        PostDraftReviewSession session = result.currentFocusSession().orElseThrow();
+        assertEquals(1, session.workingSetContext().snapshots().size());
+        assertEquals("chunk-1", session.workingSetContext().snapshots().get(0).chunkId());
+        assertTrue(session.workingSetContext().snapshots().get(0).anchor());
+    }
+
+    @Test
+    void shouldNotCompactWorkingSetContextWhenTranscriptAndEvidenceAreCompacted() throws Exception {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", 1, "translated-1")));
+        SequenceGenerationPort generationPort = new SequenceGenerationPort(
+                new ReviewToolDecision("request_human_review", Map.of(), "stop")
+        );
+        AutonomousProjectReviewAgent agent = new AutonomousProjectReviewAgent(
+                reader,
+                new PostDraftReviewSessionFactory(),
+                new PostDraftReviewProblemClassifier(),
+                new SequenceProjectFocusSelector(),
+                new PromptBackedNextStepDecisionProvider(
+                        new InvestigationPromptBuilder(),
+                        ReviewToolRegistry.defaultRegistry(),
+                        generationPort
+                ),
+                new ReviewToolExecutor(
+                        ReviewToolRegistry.defaultRegistry(),
+                        new ReviewToolGuardrail(),
+                        reader,
+                        PostDraftReviewAgentTermWriter.noop(),
+                        new PromptBackedStrategyEvaluationService(new EvaluationPromptBuilder(), generationPort),
+                        new PostDraftRevisionService(
+                                new PromptBackedRevisionDraftProvider(),
+                                (session, chunk, strategy, draft) -> new RevisionSelfCheckResult(true, "", List.of())
+                        ),
+                        new WorkingSetCompletionHandler(reader, new PostDraftReviewProcessSummaryAssembler()),
+                        new PostDraftReviewProcessSummaryAssembler(),
+                        new FocusHumanStopPolicy(1, 1)
+                ),
+                ReviewRuntimeVisualizer.noop()
+        );
+
+        PostDraftReviewSession session = PostDraftReviewSession.investigating(
+                        "project-1",
+                        ReviewFocus.forChunk("chunk-1"),
+                        "note",
+                        Set.of(),
+                        List.of(
+                                "evidence-1", "evidence-2", "evidence-3", "evidence-4", "evidence-5", "evidence-6",
+                                "evidence-7", "evidence-8", "evidence-9", "evidence-10", "evidence-11", "evidence-12",
+                                "evidence-13"
+                        )
+                )
+                .appendTranscript("turn-1")
+                .appendTranscript("turn-2")
+                .appendTranscript("turn-3")
+                .appendTranscript("turn-4")
+                .appendTranscript("turn-5")
+                .appendTranscript("turn-6")
+                .appendTranscript("turn-7")
+                .appendTranscript("turn-8")
+                .appendTranscript("turn-9")
+                .appendTranscript("turn-10")
+                .appendTranscript("turn-11")
+                .appendTranscript("turn-12")
+                .withWorkingSetContext(new io.quillloom.application.postdraft.review.model.ReviewWorkingSetContext(List.of(
+                        new io.quillloom.application.postdraft.review.model.ReviewContextChunkSnapshot(
+                                "chunk-1", 1, "source-1", "translated-1", "commentary", List.of(), List.of(), "", true)
+                )));
+        ProjectReviewRuntimeSession runtime = ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1"))
+                .withSelectedFocus("chunk-1")
+                .withCurrentFocusSession(session, 5, ReviewAgentState.INVESTIGATING);
+
+        java.lang.reflect.Method method = AutonomousProjectReviewAgent.class
+                .getDeclaredMethod("compactFocusTranscriptIfNeeded", ProjectReviewRuntimeSession.class);
+        method.setAccessible(true);
+        ProjectReviewRuntimeSession compacted = (ProjectReviewRuntimeSession) method.invoke(agent, runtime);
+
+        PostDraftReviewSession compactedSession = compacted.currentFocusSession().orElseThrow();
+        assertEquals(1, compactedSession.workingSetContext().snapshots().size());
+        assertEquals("chunk-1", compactedSession.workingSetContext().snapshots().get(0).chunkId());
+        assertTrue(compactedSession.transcriptStore().replay().size() < session.transcriptStore().replay().size());
     }
 
     @Test
@@ -549,6 +794,129 @@ class AutonomousProjectReviewAgentTest {
         assertTrue(result.processTrail().stream().anyMatch(entry -> entry.contains("llmCallFailed=evaluation structured output failed; rawOutput=nope")));
     }
 
+    @Test
+    void shouldContainUnexpectedNextStepRuntimeFailureAsLlmCallFailed() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", "translated-1")));
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                new MixedGenerationPort(List.of(), List.of())
+        ) {
+            @Override
+            public ReviewToolDecision decide(PostDraftReviewSession session) {
+                throw new RuntimeException("GOAWAY received; HTTP/2 connection closed");
+            }
+        };
+
+        AutonomousProjectReviewAgent agent = new AutonomousProjectReviewAgent(
+                reader,
+                new PostDraftReviewSessionFactory(),
+                new PostDraftReviewProblemClassifier(),
+                new SequenceProjectFocusSelector(),
+                provider,
+                new ReviewToolExecutor(
+                        ReviewToolRegistry.defaultRegistry(),
+                        new ReviewToolGuardrail(),
+                        reader,
+                        PostDraftReviewAgentTermWriter.noop(),
+                        new PromptBackedStrategyEvaluationService(new EvaluationPromptBuilder(), new MixedGenerationPort(List.of(), List.of())),
+                        new PostDraftRevisionService(
+                                new PromptBackedRevisionDraftProvider(),
+                                (session, chunk, strategy, draft) -> new RevisionSelfCheckResult(true, "", List.of())
+                        ),
+                        new WorkingSetCompletionHandler(reader, new PostDraftReviewProcessSummaryAssembler()),
+                        new PostDraftReviewProcessSummaryAssembler(),
+                        new FocusHumanStopPolicy(1, 1)
+                ),
+                ReviewRuntimeVisualizer.noop()
+        );
+
+        ProjectReviewRuntimeSession result = agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1")),
+                "operator note"
+        );
+
+        assertEquals(ReviewAgentState.FAILED, result.state());
+        assertEquals(ReviewProjectStopReason.LLM_CALL_FAILED, result.stopReason());
+        assertTrue(result.processTrail().stream().anyMatch(entry -> entry.contains("llmCallFailed=GOAWAY received; HTTP/2 connection closed")));
+    }
+
+    @Test
+    void shouldContainRevisionSelfCheckRuntimeFailureAsLlmCallFailed() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", "translated-1")));
+        ReviewAgentStructuredGenerationPort generationPort = new ReviewAgentStructuredGenerationPort() {
+            private int nextStepCalls;
+
+            @Override
+            public ReviewToolDecision generateNextToolDecision(String systemPrompt, String userPrompt) {
+                nextStepCalls++;
+                if (nextStepCalls == 1) {
+                    return new ReviewToolDecision("evaluate_focus", Map.of(), "choose strategy");
+                }
+                return new ReviewToolDecision("draft_revision", Map.of(), "need revision");
+            }
+
+            @Override
+            public ReviewAgentEvaluation generateEvaluationDecision(String systemPrompt, String userPrompt) {
+                return new ReviewAgentEvaluation(ReviewStrategy.LIGHT_EDIT, "need revision", io.quillloom.application.postdraft.review.model.EvidenceSufficiency.SUFFICIENT, false);
+            }
+
+            @Override
+            public RevisionDraft generateRevisionDraft(String systemPrompt, String userPrompt) {
+                return new RevisionDraft("revised", RevisionMode.LIGHT_EDIT, List.of(), List.of());
+            }
+
+            @Override
+            public RevisionSelfCheckResult generateRevisionSelfCheck(String systemPrompt, String userPrompt) {
+                throw new LlmTransientException("GOAWAY received during self-check");
+            }
+
+            @Override
+            public RecordConfirmedTermsProposal generateRecordConfirmedTermsProposal(String systemPrompt, String userPrompt) {
+                return new RecordConfirmedTermsProposal(RecordConfirmedTermsProposal.Action.NOT_APPLICABLE, "n/a", List.of());
+            }
+        };
+
+        AutonomousProjectReviewAgent agent = new AutonomousProjectReviewAgent(
+                reader,
+                new PostDraftReviewSessionFactory(),
+                new PostDraftReviewProblemClassifier(),
+                new SequenceProjectFocusSelector(),
+                new PromptBackedNextStepDecisionProvider(
+                        new InvestigationPromptBuilder(),
+                        ReviewToolRegistry.defaultRegistry(),
+                        generationPort
+                ),
+                new ReviewToolExecutor(
+                        ReviewToolRegistry.defaultRegistry(),
+                        new ReviewToolGuardrail(),
+                        reader,
+                        PostDraftReviewAgentTermWriter.noop(),
+                        new PromptBackedStrategyEvaluationService(new EvaluationPromptBuilder(), generationPort),
+                        new PostDraftRevisionService(
+                                new PromptBackedRevisionDraftProvider(new io.quillloom.application.postdraft.review.prompt.RevisionPromptBuilder(), generationPort),
+                                new io.quillloom.application.postdraft.review.service.LlmBackedRevisionSelfCheckService(
+                                        new io.quillloom.application.postdraft.review.prompt.RevisionSelfCheckPromptBuilder(),
+                                        generationPort
+                                )
+                        ),
+                        new WorkingSetCompletionHandler(reader, new PostDraftReviewProcessSummaryAssembler()),
+                        new PostDraftReviewProcessSummaryAssembler(),
+                        new FocusHumanStopPolicy(1, 1)
+                ),
+                ReviewRuntimeVisualizer.noop()
+        );
+
+        ProjectReviewRuntimeSession result = agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1")),
+                "operator note"
+        );
+
+        assertEquals(ReviewAgentState.FAILED, result.state());
+        assertEquals(ReviewProjectStopReason.LLM_CALL_FAILED, result.stopReason());
+        assertTrue(result.processTrail().stream().anyMatch(entry -> entry.contains("llmCallFailed=GOAWAY received during self-check")));
+    }
+
     private static AutonomousProjectReviewAgent buildAgent(PostDraftReviewAgentReader reader,
                                                            ReviewAgentStructuredGenerationPort generationPort) {
         return new AutonomousProjectReviewAgent(
@@ -585,6 +953,21 @@ class AutonomousProjectReviewAgentTest {
                 1,
                 "block-1",
                 "source text",
+                translatedText,
+                "commentary",
+                List.of(),
+                Map.of(),
+                List.<TranslationCandidateUpdate>of(),
+                null
+        );
+    }
+
+    private static PostDraftChunkRecord chunk(String chunkId, int sequence, String translatedText) {
+        return new PostDraftChunkRecord(
+                chunkId,
+                sequence,
+                "block-1",
+                "source text " + sequence,
                 translatedText,
                 "commentary",
                 List.of(),
@@ -716,6 +1099,7 @@ class AutonomousProjectReviewAgentTest {
 
     private static final class InMemoryReader implements PostDraftReviewAgentReader {
         private final List<PostDraftChunkRecord> chunks;
+        private final java.util.ArrayList<String> adjacentReadChunkIds = new java.util.ArrayList<>();
 
         private InMemoryReader(List<PostDraftChunkRecord> chunks) {
             this.chunks = List.copyOf(chunks);
@@ -753,6 +1137,7 @@ class AutonomousProjectReviewAgentTest {
 
         @Override
         public List<PostDraftChunkRecord> readAdjacentChunks(String projectId, String chunkId, int before, int after) {
+            adjacentReadChunkIds.add(chunkId);
             int index = indexOf(chunkId);
             int from = Math.max(0, index - before);
             int to = Math.min(chunks.size(), index + after + 1);

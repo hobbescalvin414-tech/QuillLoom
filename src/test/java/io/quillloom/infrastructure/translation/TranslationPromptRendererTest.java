@@ -91,6 +91,47 @@ class TranslationPromptRendererTest {
         assertTrue(prompt.contains("target-language-purity"));
     }
 
+    @Test
+    void shouldRenderGlobalNamingTablesAndAliasReadOnlyPolicy() {
+        TranslationPromptRenderer renderer = new TranslationPromptRenderer(new TranslationPromptProperties());
+
+        String prompt = renderer.renderDraftRound(createInput("zh"));
+
+        assertTrue(prompt.contains("DraftStageGlobalGlossary"));
+        assertTrue(prompt.contains("GlobalAliasConsistencyTable"));
+        assertTrue(prompt.contains("先执行 hard entries"));
+        assertTrue(prompt.contains("alias 表只消费"));
+        assertTrue(prompt.contains("只对表外项写入 confirmedTermUpdates 或 candidateUpdates"));
+    }
+
+    @Test
+    void shouldRequireFirstNamingDecisionToBeRecordedIntoConfirmedTermUpdates() {
+        TranslationPromptRenderer renderer = new TranslationPromptRenderer(new TranslationPromptProperties());
+
+        String draftPrompt = renderer.renderDraftRound(createInput("zh"));
+        String revisionPrompt = renderer.renderRevisionRound(
+                createInput("zh"),
+                new ChunkTranslationLlmResult(
+                        "Louki站在门口。",
+                        "commentary",
+                        List.of(new ChunkTranslationDecisionNoteResult(
+                                "first-name-confirmation-missing",
+                                "Louki",
+                                "高频核心人名尚未进入当前生效译名表，但本轮没有把本次命名决定写入 confirmedTermUpdates。",
+                                "请在修订轮补写 confirmedTermUpdates。"
+                        )),
+                        List.of(),
+                        List.of(),
+                        new ChunkTranslationTransitionNoteResult("", "", false)
+                ),
+                List.of()
+        );
+
+        assertTrue(draftPrompt.contains("若某个高频核心人名尚未进入当前生效译名表"));
+        assertTrue(draftPrompt.contains("若保留原文，也要登记 sourceTerm => sourceTerm"));
+        assertTrue(revisionPrompt.contains("若第 1 轮遗漏了高频核心人名的首次命名登记"));
+    }
+
     private TranslationTaskInput createInput(String targetLanguage) {
         ChunkAnnotation chunk = new ChunkAnnotation(
                 new ChunkDescriptor("chunk-1", 1, "block-1", 0, 20, "Bowling entered Le Conde."),

@@ -3,7 +3,23 @@ package io.quillloom.infrastructure.translation;
 import io.quillloom.application.preprocess.assembler.PreprocessDossierAssembler;
 import io.quillloom.application.preprocess.command.PreprocessBookCommand;
 import io.quillloom.application.translation.assembler.TranslationTaskInputAssembler;
+import io.quillloom.domain.book.BookProject;
+import io.quillloom.domain.knowledge.KnowledgeCard;
+import io.quillloom.domain.knowledge.KnowledgeCardType;
+import io.quillloom.domain.memory.CoarseBlockContext;
+import io.quillloom.domain.memory.DraftStageGlobalGlossary;
+import io.quillloom.domain.memory.ExecutionContextView;
+import io.quillloom.domain.memory.GlossaryEntry;
+import io.quillloom.domain.memory.GlossaryEntrySourceKind;
+import io.quillloom.domain.memory.GlossaryEntryStrength;
+import io.quillloom.domain.memory.GlobalAliasConsistencyTable;
+import io.quillloom.domain.memory.LocalSourceContext;
+import io.quillloom.domain.preprocess.ChunkAnnotation;
+import io.quillloom.domain.preprocess.ChunkDescriptor;
 import io.quillloom.domain.memory.ProjectMemorySnapshot;
+import io.quillloom.domain.translation.TranslationRuntimeOptions;
+import io.quillloom.domain.translation.TranslationSourceMaterial;
+import io.quillloom.domain.translation.TranslationTaskInput;
 import io.quillloom.support.BookAnalysisTestSupport;
 import io.quillloom.support.PreprocessTestSupport;
 import org.junit.jupiter.api.Test;
@@ -148,7 +164,57 @@ class ChunkTranslationResultValidatorTest {
                 .anyMatch(note -> note.type().equals("glossary-compliance-warning")));
     }
 
-    private io.quillloom.domain.translation.TranslationTaskInput createInput() {
+    @Test
+    void shouldUseDraftStageGlossaryEntriesForResidueWarnings() {
+        TranslationTaskInput input = createCoreNameInput(
+                Map.of(),
+                new DraftStageGlobalGlossary(
+                        List.of(),
+                        List.of(new GlossaryEntry(
+                                "Louki",
+                                "露姬",
+                                GlossaryEntryStrength.SOFT,
+                                GlossaryEntrySourceKind.CANDIDATE_TERM,
+                                List.of("test"),
+                                "soft glossary"
+                        )),
+                        Map.of()
+                )
+        );
+
+        ChunkTranslationResultValidator validator = new ChunkTranslationResultValidator();
+        ChunkTranslationLlmResult validated = validator.validate(input, new ChunkTranslationLlmResult(
+                "Louki站在门口。",
+                "commentary",
+                List.of(),
+                List.of(),
+                List.of(),
+                new ChunkTranslationTransitionNoteResult("", "", false)
+        ));
+
+        assertTrue(validated.decisionNotes().stream()
+                .anyMatch(note -> note.type().equals("glossary-entry-not-applied") && note.sourceAnchor().equals("Louki")));
+    }
+
+    @Test
+    void shouldAddIssueWhenCorePersonNameIsNotConfirmedForFirstTime() {
+        TranslationTaskInput input = createCoreNameInput(Map.of(), DraftStageGlobalGlossary.empty());
+
+        ChunkTranslationResultValidator validator = new ChunkTranslationResultValidator();
+        ChunkTranslationLlmResult validated = validator.validate(input, new ChunkTranslationLlmResult(
+                "Louki站在门口。",
+                "commentary",
+                List.of(),
+                List.of(),
+                List.of(),
+                new ChunkTranslationTransitionNoteResult("", "", false)
+        ));
+
+        assertTrue(validated.decisionNotes().stream()
+                .anyMatch(note -> note.type().equals("first-name-confirmation-missing") && note.sourceAnchor().equals("Louki")));
+    }
+
+    private TranslationTaskInput createInput() {
         PreprocessBookCommand command = new PreprocessBookCommand(
                 "project-1",
                 "sample",
@@ -167,5 +233,46 @@ class ChunkTranslationResultValidatorTest {
                 new ProjectMemorySnapshot("project-1", Map.of("Paris", "Paris-zh"), List.of(), List.of()),
                 null
         );
+    }
+
+    private TranslationTaskInput createCoreNameInput(Map<String, String> confirmedTerms,
+                                                     DraftStageGlobalGlossary glossary) {
+        ChunkAnnotation chunk = new ChunkAnnotation(
+                new ChunkDescriptor("chunk-core", 1, "block-1", 0, 40, "Louki waited by the door."),
+                "summary",
+                List.of("Louki"),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of()
+        );
+
+        TranslationSourceMaterial sourceMaterial = new TranslationSourceMaterial(
+                new BookProject("project-core", "sample", "en", "zh"),
+                null,
+                chunk
+        );
+        ExecutionContextView executionContextView = new ExecutionContextView(
+                confirmedTerms,
+                List.of(),
+                LocalSourceContext.empty(),
+                CoarseBlockContext.empty(),
+                glossary,
+                GlobalAliasConsistencyTable.empty(),
+                List.of(new KnowledgeCard(
+                        "card-louki",
+                        KnowledgeCardType.CHARACTER_PROFILE,
+                        "Louki 人物卡",
+                        "人物内容",
+                        List.of("Louki"),
+                        List.of("Louki"),
+                        List.of(),
+                        "PROJECT",
+                        List.of("chunk-core")
+                )),
+                List.of(),
+                List.of()
+        );
+        return new TranslationTaskInput(sourceMaterial, executionContextView, TranslationRuntimeOptions.defaults());
     }
 }

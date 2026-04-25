@@ -1,0 +1,158 @@
+spring:
+  application:
+    name: quillloom
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+server:
+  port: 8080
+
+quillloom:
+  preprocess:
+    knowledge-base:
+      storage: postgres
+      postgres:
+        url: jdbc:postgresql://localhost:5432/robot
+        username: postgres
+        password: postgres
+        schema: public
+        initialize-schema: true
+      embedding:
+        enabled: false
+        base-url: ""
+        api-key: ""
+        model-name: ""
+        log-requests: false
+        log-responses: false
+        timeout-seconds: 60
+      retrieval:
+        assembly:
+          direct-chunk-match-weight: 100
+          exact-anchor-match-weight: 40
+          query-anchor-weight: 12
+          query-keyword-weight: 8
+          title-text-weight: 6
+          content-text-weight: 4
+          anchor-hint-weight: 10
+          anchor-title-weight: 5
+          preferred-type-weight: 16
+          vector-similarity-scale: 30
+          vector-preferred-type-bonus: 8
+          vector-direct-chunk-bonus: 12
+          vector-recall-multiplier: 3
+          default-limit: 6
+          default-per-type-limit: 2
+        supplemental-lookup:
+          direct-chunk-match-weight: 60
+          exact-anchor-match-weight: 10
+          query-anchor-weight: 14
+          query-keyword-weight: 10
+          title-text-weight: 6
+          content-text-weight: 4
+          anchor-hint-weight: 12
+          anchor-title-weight: 6
+          preferred-type-weight: 18
+          vector-similarity-scale: 34
+          vector-preferred-type-bonus: 10
+          vector-direct-chunk-bonus: 8
+          vector-recall-multiplier: 4
+          default-limit: 3
+          default-per-type-limit: 3
+    book-analysis:
+      llm:
+        enabled: false
+        base-url: ""
+        api-key: ""
+        model-name: ""
+        log-requests: false
+        log-responses: false
+        base-timeout-seconds: 240
+        timeout-step-chars: 8000
+        timeout-step-seconds: 60
+        max-timeout-seconds: 900
+    coarse-chunk-planning:
+      llm:
+        enabled: false
+        base-url: ""
+        api-key: ""
+        model-name: ""
+        log-requests: false
+        log-responses: false
+        base-timeout-seconds: 240
+        timeout-step-chars: 8000
+        timeout-step-seconds: 90
+        max-timeout-seconds: 1200
+    chunk-segmentation:
+      llm:
+        enabled: false
+        base-url: ""
+        api-key: ""
+        model-name: ""
+        log-requests: false
+        log-responses: false
+    chunk-annotation:
+      llm:
+        enabled: false
+        base-url: ""
+        api-key: ""
+        model-name: ""
+        log-requests: false
+        log-responses: false
+    knowledge-search:
+      gate:
+        enabled: true
+        max-queries-per-chunk: 2
+        require-background-signal: true
+        skip-when-covered-by-knowledge-base: true
+      searxng:
+        enabled: false
+        base-url: "http://localhost:8888/search"
+        format: "json"
+        language: "zh-CN"
+        categories: []
+        engines: []
+        page-no: 1
+        max-results: 3
+        api-key: ""
+        api-key-header-name: "Authorization"
+        api-key-prefix: "Bearer "
+        timeout-seconds: 20
+      organizer:
+        llm:
+          enabled: false
+          base-url: ""
+          api-key: ""
+          model-name: ""
+          log-requests: false
+          log-responses: false
+  translation:
+    chunk-translation:
+      prompt:
+        global:
+          accuracy-policy: "准确、忠实、自然、克制优先。不要追逐华丽、诗性或夸饰性表达。"
+          style-warnings:
+            - "正文只翻译原文已有内容，不要主动补写背景、百科解释或知识卡内容。"
+            - "不要为了显得优美而改写语义，不要把 commentary 腔写进正文。"
+        draft-round:
+          core-instructions:
+            - "先完成忠实、自然的当前 chunk 中文初稿。"
+            - "若出现未确认但需要暂时统一的人名译法，可写入 confirmedTermUpdates。"
+        revision-round:
+          core-instructions:
+            - "本轮优先修正文边界污染和明显失真，不要继续拔高文风。"
+            - "根据问题清单移除解释性插入、知识卡泄漏和术语说明腔。"
+      llm:
+        enabled: false
+        base-url: ""
+        api-key: ""
+        model-name: ""
+        log-requests: false
+        log-responses: false

@@ -1,1 +1,32 @@
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# Logs
+logs/
+
+# Run output
+run-output/
+
+# Book source (runtime input copies)
+book/
+
+# .worktrees is managed by git itself but we keep this for safety
 .worktrees/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -30,7 +30,10 @@ public class ChunkTranslationResultValidator {
             "context",
             "confirmed-term-conflict",
             "text-boundary-warning",
-            "glossary-compliance-warning"
+            "glossary-compliance-warning",
+            "name-residue-warning",
+            "glossary-entry-not-applied",
+            "first-name-confirmation-missing"
     );
 
     private static final Set<String> ALLOWED_LOOKUP_REASONS = Set.of(
@@ -112,9 +115,10 @@ public class ChunkTranslationResultValidator {
 
     public ChunkTranslationLlmResult validate(TranslationTaskInput input, ChunkTranslationLlmResult result) {
         Map<String, String> existingConfirmedTerms = input.executionContextView().confirmedTerms();
+        Map<String, String> effectiveGlossaryTerms = mergeEffectiveGlossaryTerms(input);
         List<ChunkTranslationDecisionNoteResult> decisionNotes = sanitizeDecisionNotes(result.decisionNotes());
         decisionNotes.addAll(sanitizeTextBoundaryWarnings(input.sourceMaterial().project().targetLanguage(), result.translatedText()));
-        decisionNotes.addAll(glossaryComplianceIssueDetector.detect(existingConfirmedTerms, result.translatedText()));
+        decisionNotes.addAll(glossaryComplianceIssueDetector.detect(effectiveGlossaryTerms, result.translatedText()));
         Map<String, ConfirmedTermUpdateResult> allowedConfirmedUpdates = new LinkedHashMap<>();
 
         for (ConfirmedTermUpdateResult update : safeList(result.confirmedTermUpdates())) {
@@ -143,6 +147,8 @@ public class ChunkTranslationResultValidator {
             allowedConfirmedUpdates.putIfAbsent(sourceTerm, new ConfirmedTermUpdateResult(sourceTerm, translatedTerm));
         }
 
+        decisionNotes.addAll(detectMissingFirstNamingConfirmation(input, result, effectiveGlossaryTerms, allowedConfirmedUpdates));
+
         return new ChunkTranslationLlmResult(
                 result.translatedText(),
                 sanitizeTranslatorCommentary(result.translatorCommentary()),
@@ -152,6 +158,109 @@ public class ChunkTranslationResultValidator {
                 sanitizeTransitionNote(result.transitionNote()),
                 sanitizeKnowledgeLookupRequest(result.knowledgeLookupRequest())
         );
+    }
+
+    private Map<String, String> mergeEffectiveGlossaryTerms(TranslationTaskInput input) {
+        Map<String, String> merged = new LinkedHashMap<>();
+        input.executionContextView().draftStageGlobalGlossary().hardEntries().forEach(entry -> addGlossaryEntry(merged, entry.sourceTerm(), entry.targetTerm()));
+        input.executionContextView().draftStageGlobalGlossary().softEntries().forEach(entry -> addGlossaryEntry(merged, entry.sourceTerm(), entry.targetTerm()));
+        input.executionContextView().confirmedTerms().forEach((source, target) -> addGlossaryEntry(merged, source, target));
+        return Map.copyOf(merged);
+    }
+
+    private void addGlossaryEntry(Map<String, String> glossary, String sourceTerm, String targetTerm) {
+        String normalizedSource = trimToNull(sourceTerm);
+        String normalizedTarget = trimToNull(targetTerm);
+        if (normalizedSource == null || normalizedTarget == null) {
+            return;
+        }
+        glossary.putIfAbsent(normalizedSource, normalizedTarget);
+    }
+
+    private List<ChunkTranslationDecisionNoteResult> detectMissingFirstNamingConfirmation(TranslationTaskInput input,
+                                                                                           ChunkTranslationLlmResult result,
+                                                                                           Map<String, String> effectiveGlossaryTerms,
+                                                                                           Map<String, ConfirmedTermUpdateResult> allowedConfirmedUpdates) {
+        String sourceText = input.sourceMaterial().chunk().chunk().sourceText();
+        String translatedText = result.translatedText();
+        if (sourceText == null || sourceText.isBlank() || translatedText == null || translatedText.isBlank()) {
+            return List.of();
+        }
+
+        List<ChunkTranslationDecisionNoteResult> issues = new ArrayList<>();
+        Set<String> candidateNames = collectHighPriorityNameCandidates(input);
+        for (String candidateName : candidateNames) {
+            if (effectiveGlossaryTerms.containsKey(candidateName) || allowedConfirmedUpdates.containsKey(candidateName)) {
+                continue;
+            }
+            if (!sourceText.contains(candidateName)) {
+                continue;
+            }
+            if (!translatedText.contains(candidateName) && !containsHanCharacter(translatedText)) {
+                continue;
+            }
+            issues.add(new ChunkTranslationDecisionNoteResult(
+                    "first-name-confirmation-missing",
+                    candidateName,
+                    "高频核心人名尚未进入当前生效译名表，但本轮没有把本次命名决定写入 confirmedTermUpdates。",
+                    "请在修订轮明确该人名本轮采用的稳定叫法，并写入 confirmedTermUpdates；若决定保留原文，也需登记 sourceTerm => sourceTerm。"
+            ));
+        }
+        return List.copyOf(issues);
+    }
+
+    private Set<String> collectHighPriorityNameCandidates(TranslationTaskInput input) {
+        Set<String> candidates = new LinkedHashSet<>();
+        input.executionContextView().relatedKnowledgeCards().forEach(card -> {
+            if (card.cardType() != KnowledgeCardType.CHARACTER_PROFILE) {
+                return;
+            }
+            card.anchorNames().forEach(anchor -> addCoreNameCandidate(candidates, anchor));
+            card.keywords().forEach(keyword -> addCoreNameCandidate(candidates, keyword));
+        });
+        input.executionContextView().globalAliasConsistencyTable().clusters().forEach(cluster -> {
+            addCoreNameCandidate(candidates, cluster.canonicalSourceNameOptional());
+            cluster.surfaceForms().forEach(surfaceForm -> addCoreNameCandidate(candidates, surfaceForm));
+        });
+        input.sourceMaterial().chunk().personAliasHints().forEach(hint ->
+                hint.surfaceForms().forEach(surfaceForm -> addCoreNameCandidate(candidates, surfaceForm)));
+        input.sourceMaterial().chunk().entities().forEach(entity -> addCoreNameCandidate(candidates, entity));
+        return candidates;
+    }
+
+    private void addCoreNameCandidate(Set<String> candidates, String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return;
+        }
+        if (!looksLikeCorePersonName(normalized)) {
+            return;
+        }
+        candidates.add(normalized);
+    }
+
+    private boolean looksLikeCorePersonName(String value) {
+        boolean hasLetter = false;
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (Character.isLetter(ch)) {
+                hasLetter = true;
+                if (Character.isUpperCase(ch)) {
+                    return true;
+                }
+            }
+        }
+        return hasLetter && value.contains(" ");
+    }
+
+    private boolean containsHanCharacter(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            Character.UnicodeScript script = Character.UnicodeScript.of(text.charAt(i));
+            if (script == Character.UnicodeScript.HAN) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String sanitizeTranslatorCommentary(String value) {
@@ -166,10 +275,10 @@ public class ChunkTranslationResultValidator {
             if (trimmedLine == null) {
                 continue;
             }
-            String lowerCase = trimmedLine.toLowerCase();
+            String lowerCase = trimmedLine.toLowerCase(Locale.ROOT);
             boolean forbidden = false;
             for (String forbiddenHint : COMMENTARY_FORBIDDEN_HINTS) {
-                if (lowerCase.contains(forbiddenHint.toLowerCase())) {
+                if (lowerCase.contains(forbiddenHint.toLowerCase(Locale.ROOT))) {
                     forbidden = true;
                     break;
                 }
@@ -222,7 +331,7 @@ public class ChunkTranslationResultValidator {
         if (normalized == null) {
             return "issue";
         }
-        String lowerCase = normalized.toLowerCase();
+        String lowerCase = normalized.toLowerCase(Locale.ROOT);
         return ALLOWED_DECISION_NOTE_TYPES.contains(lowerCase) ? lowerCase : "issue";
     }
 
@@ -263,9 +372,9 @@ public class ChunkTranslationResultValidator {
         if (normalized == null) {
             return "";
         }
-        String lowerCase = normalized.toLowerCase();
+        String lowerCase = normalized.toLowerCase(Locale.ROOT);
         for (String forbiddenHint : TRANSITION_NOTE_FORBIDDEN_HINTS) {
-            if (lowerCase.contains(forbiddenHint.toLowerCase())) {
+            if (lowerCase.contains(forbiddenHint.toLowerCase(Locale.ROOT))) {
                 return "";
             }
         }

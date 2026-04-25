@@ -2,11 +2,13 @@ package io.quillloom.infrastructure.preprocess.bookanalysis;
 
 import org.springframework.stereotype.Component;
 
+import java.util.Locale;
+
 @Component
 public final class GlobalConstraintBoundaryJudge {
 
     public GlobalConstraintBoundaryDecision judge(String type, String description) {
-        String normalizedType = type == null ? "" : type.trim().toLowerCase();
+        String normalizedType = type == null ? "" : type.trim().toLowerCase(Locale.ROOT);
         String normalizedDescription = description == null ? "" : description.trim();
         if (normalizedDescription.isBlank()) {
             return GlobalConstraintBoundaryDecision.reject("blank-description");

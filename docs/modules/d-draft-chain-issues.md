@@ -18,18 +18,17 @@
    - `target-language-purity`
 2. 这些问题会进入 validator，转成可修复的 decision note，而不是直接硬失败。
 3. revision round 已开始接收正文问题清单。
+4. `GlossaryComplianceIssueDetector` 已能识别：
+   - `name-residue-warning`（原文名与确认译名混用）
+   - `glossary-entry-not-applied`（已确认术语未沿用）
+   - `first-name-confirmation-missing`（首次出现未确认译名）
+5. revision prompt 已明确按 issue 清单定向修订，不是重翻，不是自由润色。
+6. glossary issue 与正文纯度 issue 已一并纳入 revision round。
 
 ## 接下来必须继续收口的点
 
-1. 新增 glossary 正文合规检测：
-   - 已确认术语未沿用
-   - 原文名与确认译名混用
-   - 明显命名漂移
-2. 明确 revision prompt：
-   - 不是重翻
-   - 不是自由润色
-   - 是按 issue 清单定向修订
-3. 将 glossary issue 与正文纯度 issue 一并纳入 revision round 优先级。
+1. 进一步提升 glossary 合规检测的召回率（当前依赖 LLM 识别，可能遗漏隐式混用）。
+2. 跨 chunk 术语一致性仍需 Review Agent 保障（D 只做单 chunk 内检测）。
 
 ## 边界
 

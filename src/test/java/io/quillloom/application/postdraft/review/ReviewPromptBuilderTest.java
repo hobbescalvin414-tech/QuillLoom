@@ -3,9 +3,13 @@ package io.quillloom.application.postdraft.review;
 import io.quillloom.application.postdraft.review.model.PostDraftReviewSession;
 import io.quillloom.application.postdraft.review.model.ReviewAgentAction;
 import io.quillloom.application.postdraft.review.model.ReviewAgentState;
+import io.quillloom.application.postdraft.review.model.ReviewBoundaryWindow;
+import io.quillloom.application.postdraft.review.model.ReviewContextChunkSnapshot;
 import io.quillloom.application.postdraft.review.model.ReviewFocus;
 import io.quillloom.application.postdraft.review.model.ReviewProblemType;
 import io.quillloom.application.postdraft.review.model.ReviewStrategy;
+import io.quillloom.application.postdraft.review.model.ReviewToolTrace;
+import io.quillloom.application.postdraft.review.model.ReviewWorkingSetContext;
 import io.quillloom.application.postdraft.review.model.RevisionDraft;
 import io.quillloom.application.postdraft.review.model.RevisionMode;
 import io.quillloom.application.postdraft.review.prompt.EvaluationPromptBuilder;
@@ -99,6 +103,17 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
+    void shouldRenderLiteraryTranslationReviewerPositioningInSystemPrompt() {
+        String prompt = new ReviewAgentSystemPromptBuilder()
+                .build(ReviewToolRegistry.defaultRegistry().definitions());
+
+        assertTrue(prompt.contains("literary translation review specialist"));
+        assertTrue(prompt.contains("not re-running the full translation pipeline"));
+        assertTrue(prompt.contains("naming consistency"));
+        assertTrue(prompt.contains("workingSet submission"));
+    }
+
+    @Test
     void shouldRenderFormalToolOperatingRules() {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
@@ -152,6 +167,18 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
+    void shouldRequireConcreteQuestionForHumanInSystemPrompt() {
+        String prompt = new ReviewAgentSystemPromptBuilder()
+                .build(ReviewToolRegistry.defaultRegistry().definitions());
+
+        assertTrue(prompt.contains("questionForHuman"));
+        assertTrue(prompt.contains("requestReason"));
+        assertTrue(prompt.contains("requestNote"));
+        assertTrue(prompt.contains("resumeHint"));
+        assertTrue(prompt.contains("Do not use vague human questions"));
+    }
+
+    @Test
     void shouldRenderP0BlockingRulesAndRemoveLooseCompletionExitInSystemPrompt() {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
@@ -200,6 +227,150 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
+    void shouldExplainQuestionForHumanRequirementInInvestigationPrompt() {
+        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
+        PostDraftReviewSession session = sampleSession();
+
+        String prompt = builder.build(
+                session,
+                ReviewToolRegistry.defaultRegistry().definitions(),
+                List.of()
+        );
+
+        assertTrue(prompt.contains("questionForHuman"));
+        assertTrue(prompt.contains("request_human_review"));
+        assertTrue(prompt.contains("not empty"));
+        assertTrue(prompt.contains("Do not use vague human questions"));
+    }
+
+    @Test
+    void shouldExposeObjectiveAdjacentBoundaryStateInInvestigationPrompt() {
+        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
+        PostDraftReviewSession session = sampleSession()
+                .withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                        new ReviewContextChunkSnapshot("chunk-1", 1, "source-1", "translated-1", "", List.of(), List.of(), "", true)
+                )))
+                .withBoundaryWindow(new ReviewBoundaryWindow(List.of(
+                        new ReviewContextChunkSnapshot("chunk-1", 1, "source-1", "translated-1", "", List.of(), List.of(), "", true)
+                )));
+
+        String prompt = builder.build(
+                session,
+                ReviewToolRegistry.defaultRegistry().definitions(),
+                List.of()
+        );
+
+        assertTrue(prompt.contains("boundaryLeftChunkId=chunk-1"));
+        assertTrue(prompt.contains("boundaryRightChunkId=chunk-1"));
+        assertTrue(prompt.contains("anchorOnlyView=true"));
+        assertTrue(prompt.contains("hasPreviousRead=false"));
+        assertTrue(prompt.contains("hasNextRead=false"));
+        assertTrue(prompt.contains("adjacentReadCount=0"));
+    }
+
+    @Test
+    void shouldStrengthenAdjacentReadPriorityAndBlockExpansionBoundaryInPrompts() {
+        String systemPrompt = new ReviewAgentSystemPromptBuilder()
+                .build(ReviewToolRegistry.defaultRegistry().definitions());
+        String investigationPrompt = new InvestigationPromptBuilder()
+                .build(sampleSession(), ReviewToolRegistry.defaultRegistry().definitions(), List.of());
+
+        assertTrue(systemPrompt.contains("do not directly evaluate_focus or complete_working_set"));
+        assertTrue(systemPrompt.contains("expand_block_context does not replace adjacent continuity verification"));
+        assertTrue(investigationPrompt.contains("Before making any continuity judgment, first read adjacent context with tools."));
+        assertTrue(investigationPrompt.contains("In these cases, do not directly treat continuity as established."));
+        assertTrue(investigationPrompt.contains("expand_block_context"));
+        assertTrue(investigationPrompt.contains("does not replace adjacent continuity reading"));
+    }
+
+    @Test
+    void shouldTreatAnchorOnlyViewAsMissingAdjacentContextForContinuitySensitiveCases() {
+        PostDraftReviewSession session = sampleSession()
+                .withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                        new ReviewContextChunkSnapshot("chunk-1", 1, "source-1", "translated-1", "", List.of(), List.of(), "", true)
+                )))
+                .withBoundaryWindow(new ReviewBoundaryWindow(List.of(
+                        new ReviewContextChunkSnapshot("chunk-1", 1, "source-1", "translated-1", "", List.of(), List.of(), "", true)
+                )));
+
+        String prompt = new InvestigationPromptBuilder()
+                .build(session, ReviewToolRegistry.defaultRegistry().definitions(), List.of("reply-like continuity risk"));
+
+        assertTrue(prompt.contains("anchorOnlyView=true"));
+        assertTrue(prompt.contains("adjacentReadCount=0"));
+        assertTrue(prompt.contains("If no adjacent context has been read yet, first call `read_previous_chunks` and/or `read_next_chunks`."));
+        assertTrue(prompt.contains("Do not treat anchor-only reading as sufficient in that case."));
+    }
+
+    @Test
+    void shouldNotTreatSingleSidedAdjacentReadAsFullContinuityVerification() {
+        PostDraftReviewSession session = sampleSession()
+                .withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                        new ReviewContextChunkSnapshot("chunk-1", 1, "source-1", "translated-1", "", List.of(), List.of(), "", true),
+                        new ReviewContextChunkSnapshot("chunk-2", 2, "source-2", "translated-2", "", List.of(), List.of(), "", false)
+                )))
+                .withBoundaryWindow(new ReviewBoundaryWindow(List.of(
+                        new ReviewContextChunkSnapshot("chunk-1", 1, "source-1", "translated-1", "", List.of(), List.of(), "", true),
+                        new ReviewContextChunkSnapshot("chunk-2", 2, "source-2", "translated-2", "", List.of(), List.of(), "", false)
+                )));
+
+        String prompt = new InvestigationPromptBuilder()
+                .build(session, ReviewToolRegistry.defaultRegistry().definitions(), List.of("transition continuity risk"));
+
+        assertTrue(prompt.contains("hasPreviousRead=false"));
+        assertTrue(prompt.contains("hasNextRead=true"));
+        assertTrue(prompt.contains("Do not treat a single-sided adjacent read as sufficient when the unresolved issue still depends on the missing side."));
+        assertTrue(prompt.contains("If the current judgment still depends on unread adjacent text, continue investigation."));
+    }
+
+    @Test
+    void shouldForbidCompleteWorkingSetBeforeRevisionSelfCheckHasPassedInPrompts() {
+        PostDraftReviewSession session = sampleSession()
+                .withStrategy(ReviewStrategy.LIGHT_EDIT);
+        String systemPrompt = new ReviewAgentSystemPromptBuilder()
+                .build(ReviewToolRegistry.defaultRegistry().definitions());
+        String investigationPrompt = new InvestigationPromptBuilder()
+                .build(session, ReviewToolRegistry.defaultRegistry().definitions(), List.of());
+
+        assertTrue(systemPrompt.contains("if current strategy is LIGHT_EDIT / DEEP_EDIT / RETRANSLATE"));
+        assertTrue(systemPrompt.contains("must not call complete_working_set"));
+        assertTrue(systemPrompt.contains("selfCheckPassed=true"));
+        assertTrue(systemPrompt.contains("revision_ready_for_completion"));
+        assertTrue(investigationPrompt.contains("If current strategy is `LIGHT_EDIT` / `DEEP_EDIT` / `RETRANSLATE`, you must not call `complete_working_set`"));
+        assertTrue(investigationPrompt.contains("selfCheckPassed=true"));
+    }
+
+    @Test
+    void shouldRenderProjectCompletionStateIntoInvestigationPrompt() {
+        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
+        PostDraftReviewSession session = sampleSession();
+
+        String prompt = builder.build(
+                session,
+                ReviewToolRegistry.defaultRegistry().definitions(),
+                List.of(),
+                new InvestigationPromptBuilder.PromptProjectState(0, 3, false)
+        );
+
+        assertTrue(prompt.contains("pendingChunkCount=0"));
+        assertTrue(prompt.contains("completedChunkCount=3"));
+        assertTrue(prompt.contains("currentFocusChunkStillPending=false"));
+        assertTrue(prompt.contains("Call `complete_project`"));
+        assertTrue(prompt.contains("Do not call `complete_working_set` for a focusChunk that is no longer pending."));
+    }
+
+    @Test
+    void shouldExplainPendingEmptyAndStaleFocusEndgameInSystemPrompt() {
+        String prompt = new ReviewAgentSystemPromptBuilder()
+                .build(ReviewToolRegistry.defaultRegistry().definitions());
+
+        assertTrue(prompt.contains("If pendingChunkCount=0"));
+        assertTrue(prompt.contains("prefer complete_project"));
+        assertTrue(prompt.contains("If currentFocusChunkStillPending=false"));
+        assertTrue(prompt.contains("do not call complete_working_set"));
+    }
+
+    @Test
     void shouldKeepProposalDtoDetailsOutOfInvestigationPrompt() {
         InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
         PostDraftReviewSession session = sampleSession();
@@ -239,6 +410,69 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
+    void shouldRenderInvestigationPromptWithNewSectionOrder() {
+        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
+        PostDraftReviewSession session = sampleSession();
+
+        String prompt = builder.build(
+                session,
+                ReviewToolRegistry.defaultRegistry().definitions(),
+                List.of("evidence-A")
+        );
+
+        assertTrue(prompt.contains("[Current Facts]"));
+        assertTrue(prompt.contains("[Product Role And Core Responsibilities]"));
+        assertTrue(prompt.contains("[Action Tree]"));
+        assertTrue(prompt.contains("[Working Set Text Context]"));
+        assertTrue(prompt.contains("[State Memory]"));
+        assertTrue(prompt.indexOf("[Current Facts]") < prompt.indexOf("[Product Role And Core Responsibilities]"));
+        assertTrue(prompt.indexOf("[Product Role And Core Responsibilities]") < prompt.indexOf("[Action Tree]"));
+        assertTrue(prompt.indexOf("[Action Tree]") < prompt.indexOf("[Working Set Text Context]"));
+        assertTrue(prompt.indexOf("[Working Set Text Context]") < prompt.indexOf("[State Memory]"));
+    }
+
+    @Test
+    void shouldRenderWorkingSetContextSnapshotsIntoInvestigationPrompt() {
+        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
+        PostDraftReviewSession session = sampleSession().withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                new ReviewContextChunkSnapshot(
+                        "chunk-1",
+                        1,
+                        "source-1",
+                        "translated-1",
+                        "commentary-1",
+                        List.of("decision-1"),
+                        List.of("Louki->露姬"),
+                        "transition-1",
+                        true
+                ),
+                new ReviewContextChunkSnapshot(
+                        "chunk-2",
+                        2,
+                        "source-2",
+                        "translated-2",
+                        "commentary-2",
+                        List.of(),
+                        List.of(),
+                        "",
+                        false
+                )
+        )));
+
+        String prompt = builder.build(
+                session,
+                ReviewToolRegistry.defaultRegistry().definitions(),
+                List.of("evidence-A")
+        );
+
+        assertTrue(prompt.contains("chunkId=chunk-1"));
+        assertTrue(prompt.contains("sourceText=source-1"));
+        assertTrue(prompt.contains("translatedText=translated-1"));
+        assertTrue(prompt.contains("anchor=true"));
+        assertTrue(prompt.contains("chunkId=chunk-2"));
+    }
+
+    @Test
     void shouldUsePlaceholderExampleInsteadOfRealTermInInvestigationPrompt() {
         InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
         PostDraftReviewSession session = sampleSession();
@@ -255,9 +489,101 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
+    void shouldRenderWorkingSetTextContextIntoEvaluationPrompt() {
+        EvaluationPromptBuilder builder = new EvaluationPromptBuilder();
+        PostDraftReviewSession session = sampleSession().withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                new ReviewContextChunkSnapshot(
+                        "chunk-1",
+                        1,
+                        "Louki looked back.",
+                        "露琪回头看了一眼。",
+                        "命名和衔接需复核",
+                        List.of("decision-1"),
+                        List.of("Louki->露琪"),
+                        "上一句引出动作",
+                        true
+                ),
+                new ReviewContextChunkSnapshot(
+                        "chunk-2",
+                        2,
+                        "She opened the cafe door.",
+                        "她推开了咖啡馆的门。",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        false
+                )
+        )));
+
+        String prompt = builder.build(
+                session,
+                Set.of(ReviewStrategy.KEEP, ReviewStrategy.LIGHT_EDIT),
+                List.of("key-evidence-1")
+        );
+
+        assertTrue(prompt.contains("[Working Set Text Context]"));
+        assertTrue(prompt.contains("chunkId=chunk-1"));
+        assertTrue(prompt.contains("sourceText=Louki looked back."));
+        assertTrue(prompt.contains("translatedText=露琪回头看了一眼。"));
+        assertTrue(prompt.contains("chunkId=chunk-2"));
+    }
+
+    @Test
+    void shouldDemoteEvidenceSummariesToStateMemoryInEvaluationPrompt() {
+        EvaluationPromptBuilder builder = new EvaluationPromptBuilder();
+        PostDraftReviewSession session = sampleSession().withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                new ReviewContextChunkSnapshot(
+                        "chunk-1",
+                        1,
+                        "source-1",
+                        "translated-1",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        true
+                )
+        )));
+
+        String prompt = builder.build(
+                session,
+                Set.of(ReviewStrategy.KEEP, ReviewStrategy.LIGHT_EDIT),
+                List.of("key-evidence-1")
+        );
+
+        assertTrue(prompt.contains("[State Memory]"));
+        assertTrue(prompt.contains("[Key Evidence]"));
+        assertTrue(prompt.indexOf("[Working Set Text Context]") < prompt.indexOf("[State Memory]"));
+    }
+
+    @Test
     void shouldRenderRevisionPromptWithAllRequiredInputs() {
         RevisionPromptBuilder builder = new RevisionPromptBuilder();
-        PostDraftReviewSession session = sampleSession();
+        PostDraftReviewSession session = sampleSession().withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                new ReviewContextChunkSnapshot(
+                        "chunk-1",
+                        1,
+                        "Le Conde etait plein.",
+                        "Le Conde Cafe was crowded.",
+                        "",
+                        List.of(),
+                        List.of("Le Conde->Le Conde Cafe"),
+                        "",
+                        true
+                ),
+                new ReviewContextChunkSnapshot(
+                        "chunk-2",
+                        2,
+                        "Louki opened the cafe door.",
+                        "露琪推开了咖啡馆的门。",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "next scene enters cafe",
+                        false
+                )
+        )));
         PostDraftChunkRecord chunk = ReviewAgentFixtures.chunkWithTermUpdate(
                 "chunk-1",
                 "Le Conde etait plein.",
@@ -282,6 +608,9 @@ class ReviewPromptBuilderTest {
         assertTrue(prompt.contains("Le Conde etait plein."));
         assertTrue(prompt.contains("Le Conde Cafe was crowded."));
         assertTrue(prompt.contains("confirmedTermUpdates"));
+        assertTrue(prompt.contains("[Working Set Context]"));
+        assertTrue(prompt.contains("chunkId=chunk-2"));
+        assertTrue(prompt.contains("sourceText=Louki opened the cafe door."));
         assertNoMojibake(prompt);
     }
 
@@ -289,6 +618,30 @@ class ReviewPromptBuilderTest {
     void shouldRenderSelfCheckPromptWithConfirmedTermConsistencyRules() {
         RevisionSelfCheckPromptBuilder builder = new RevisionSelfCheckPromptBuilder();
         PostDraftReviewSession session = sampleSession()
+                .withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                        new ReviewContextChunkSnapshot(
+                                "chunk-1",
+                                1,
+                                "Le Conde etait plein.",
+                                "Le Conde Bistro was crowded.",
+                                "",
+                                List.of(),
+                                List.of("Le Conde->Le Conde Cafe"),
+                                "",
+                                true
+                        ),
+                        new ReviewContextChunkSnapshot(
+                                "chunk-2",
+                                2,
+                                "Louki sat beside him.",
+                                "露琪坐在他旁边。",
+                                "",
+                                List.of(),
+                                List.of(),
+                                "",
+                                false
+                        )
+                )))
                 .appendTranscript("read_confirmed_terms: Le Conde -> Le Conde Cafe");
         PostDraftChunkRecord chunk = ReviewAgentFixtures.chunkWithTermUpdate(
                 "chunk-1",
@@ -310,6 +663,9 @@ class ReviewPromptBuilderTest {
         assertTrue(prompt.contains("Le Conde"));
         assertTrue(prompt.contains("Le Conde Cafe"));
         assertTrue(prompt.contains("passed=false"));
+        assertTrue(prompt.contains("[Working Set Context]"));
+        assertTrue(prompt.contains("chunkId=chunk-2"));
+        assertTrue(prompt.contains("sourceText=Louki sat beside him."));
     }
 
     private static void assertNoMojibake(String text) {

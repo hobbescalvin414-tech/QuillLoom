@@ -41,12 +41,29 @@ class CoarseChunkPlanningPromptRendererTest {
 
         assertTrue(prompt.contains("粗分块默认要明显偏大"));
         assertTrue(prompt.contains("优先减少 coarse block 数量"));
-        assertTrue(prompt.contains("宁可少切，也不要把整本书切成很长的 coarse block 列表"));
+        assertTrue(prompt.contains("后续细分块大约翻译成中文是1000字左右的量"));
+        assertTrue(prompt.contains("粗分块的大小以5到10个chunk的量为佳"));
+        assertTrue(prompt.contains("不要出现极端大块或极端小块"));
+        assertTrue(prompt.contains("注意：粗分块不要过细"));
+        assertTrue(prompt.contains("文意的整体性要求高于字数的要求"));
+        assertTrue(prompt.contains("summary"));
+        assertTrue(prompt.contains("boundaryHint"));
+    }
+
+    @Test
+    void shouldAllowBreakingSizeAdviceWithoutMechanicalParagraphSplits() {
+        CoarseChunkPlanningTaskInput input = new CoarseChunkPlanningTaskInput(
+                "project-3",
+                "long-sample",
+                "Paragraph one.\n\nParagraph two.\n\nParagraph three.\n\nParagraph four.",
+                "fr",
+                "zh"
+        );
+
+        String prompt = new CoarseChunkPlanningPromptRenderer().render(input);
+
+        assertTrue(prompt.contains("根据文本情况，可以打破这条建议"));
+        assertTrue(prompt.contains("普通正文只有在章节切换、场景切换、明显时间跳跃、空间跳跃、叙事视角切换时才切出新的 coarse block"));
         assertTrue(prompt.contains("不能仅因为换段就切"));
-        assertTrue(prompt.contains("summary 是该粗块的简短概括"));
-        assertTrue(prompt.contains("1 句完整概括"));
-        assertTrue(prompt.contains("20 到 80 个中文字符"));
-        assertTrue(prompt.contains("不能短到只剩标签词"));
-        assertTrue(prompt.contains("boundaryHint 说明为什么在这里切，但要简洁"));
     }
 }

@@ -3,16 +3,20 @@ package io.quillloom.application.postdraft.review;
 import io.quillloom.application.postdraft.review.model.FocusReviewDiagnostics;
 import io.quillloom.application.postdraft.review.model.HistoryLog;
 import io.quillloom.application.postdraft.review.model.PostDraftReviewSession;
+import io.quillloom.application.postdraft.review.model.ProjectReviewRuntimeSession;
 import io.quillloom.application.postdraft.review.model.ProjectIssueBacklog;
 import io.quillloom.application.postdraft.review.model.RecordConfirmedTermEntry;
 import io.quillloom.application.postdraft.review.model.RecordConfirmedTermsProposal;
 import io.quillloom.application.postdraft.review.model.ReviewAgentEvaluation;
 import io.quillloom.application.postdraft.review.model.ReviewAgentState;
+import io.quillloom.application.postdraft.review.model.ReviewBoundaryWindow;
+import io.quillloom.application.postdraft.review.model.ReviewContextChunkSnapshot;
 import io.quillloom.application.postdraft.review.model.ReviewEvidenceBundle;
 import io.quillloom.application.postdraft.review.model.ReviewFocus;
 import io.quillloom.application.postdraft.review.model.ReviewStrategy;
 import io.quillloom.application.postdraft.review.model.ReviewToolDecision;
 import io.quillloom.application.postdraft.review.model.ReviewVisitedObjects;
+import io.quillloom.application.postdraft.review.model.ReviewWorkingSetContext;
 import io.quillloom.application.postdraft.review.model.ReviewWorkingSet;
 import io.quillloom.application.postdraft.review.model.RevisionDraft;
 import io.quillloom.application.postdraft.review.model.RevisionMode;
@@ -86,6 +90,28 @@ class PromptBackedNextStepDecisionProviderTest {
         assertTrue(generationPort.prompts().get(1).contains("validationError: missing_argument:chunkIds"));
         assertTrue(generationPort.prompts().get(1).contains("anchorChunkId: chunk-1"));
         assertTrue(generationPort.prompts().get(1).contains("currentWorkingSet: [chunk-1, chunk-2]"));
+    }
+
+    @Test
+    void shouldInjectProjectCompletionStateIntoRuntimeBackedInvestigationPrompt() {
+        RecordingGenerationPort generationPort = new RecordingGenerationPort(
+                new ReviewToolDecision("complete_project", Map.of(), "finish")
+        );
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                new ReviewAgentSystemPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                generationPort,
+                new ReviewToolDecisionContractValidator()
+        );
+        ProjectReviewRuntimeSession runtime = ProjectReviewRuntimeSession.initialize("project-1", List.of())
+                .withSelectedFocus("chunk-1");
+
+        provider.decide(runtime, sampleSession());
+
+        assertTrue(generationPort.prompts().get(0).contains("pendingChunkCount=0"));
+        assertTrue(generationPort.prompts().get(0).contains("completedChunkCount=0"));
+        assertTrue(generationPort.prompts().get(0).contains("currentFocusChunkStillPending=false"));
     }
 
     @Test
@@ -608,6 +634,10 @@ class PromptBackedNextStepDecisionProviderTest {
             assertTrue(investigationDumpText.contains("projectId=project-1"));
             assertTrue(investigationDumpText.contains("promptKind=investigation"));
             assertTrue(investigationDumpText.contains("exceptionType=PromptCapture"));
+            assertTrue(investigationDumpText.contains("workingSetChunkIds=[chunk-1, chunk-2]"));
+            assertTrue(investigationDumpText.contains("injectedSnapshotChunkIds=[chunk-1, chunk-2]"));
+            assertTrue(investigationDumpText.contains("injectedSnapshotSourceTypes=[chunk-1:anchor, chunk-2:boundary_expansion]"));
+            assertTrue(investigationDumpText.contains("trimmedSnapshotCount=0"));
             assertTrue(investigationDumpText.contains("[systemPrompt]"));
             assertTrue(investigationDumpText.contains("[userPrompt]"));
             assertNoMojibake(investigationDumpText);
@@ -669,6 +699,8 @@ class PromptBackedNextStepDecisionProviderTest {
                     .orElseThrow();
             String repairDumpText = Files.readString(repairDump);
             assertTrue(repairDumpText.contains("promptKind=decision_repair"));
+            assertTrue(repairDumpText.contains("workingSetChunkIds=[chunk-1, chunk-2]"));
+            assertTrue(repairDumpText.contains("injectedSnapshotChunkIds=[chunk-1, chunk-2]"));
             assertTrue(repairDumpText.contains("toolName=read_previous_chunks"));
             assertTrue(repairDumpText.contains("validationError=missing_argument:count"));
             assertTrue(repairDumpText.contains("errorMessage=need context"));
@@ -759,7 +791,53 @@ class PromptBackedNextStepDecisionProviderTest {
                 Set.of(),
                 ReviewStrategy.LIGHT_EDIT,
                 FocusReviewDiagnostics.empty()
-        );
+        ).withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                new ReviewContextChunkSnapshot(
+                        "chunk-1",
+                        1,
+                        "source-1",
+                        "translated-1",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        true
+                ),
+                new ReviewContextChunkSnapshot(
+                        "chunk-2",
+                        2,
+                        "source-2",
+                        "translated-2",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        false
+                )
+        ))).withBoundaryWindow(new ReviewBoundaryWindow(List.of(
+                new ReviewContextChunkSnapshot(
+                        "chunk-1",
+                        1,
+                        "source-1",
+                        "translated-1",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        true
+                ),
+                new ReviewContextChunkSnapshot(
+                        "chunk-2",
+                        2,
+                        "source-2",
+                        "translated-2",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        false
+                )
+        )));
     }
 
     private static PostDraftReviewSession sampleSessionWithEvidence(List<String> keyEvidence,

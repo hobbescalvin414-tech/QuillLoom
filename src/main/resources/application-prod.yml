@@ -1,0 +1,117 @@
+server:
+  port: 8080
+
+quillloom:
+  preprocess:
+    knowledge-base:
+      storage: ${QUILLLOOM_PREPROCESS_KNOWLEDGE_BASE_STORAGE:postgres}
+      postgres:
+        url: ${QUILLLOOM_KB_PG_URL:jdbc:postgresql://localhost:5432/robot}
+        username: ${QUILLLOOM_KB_PG_USERNAME:postgres}
+        password: ${QUILLLOOM_KB_PG_PASSWORD:postgres}
+        schema: ${QUILLLOOM_KB_PG_SCHEMA:public}
+        initialize-schema: ${QUILLLOOM_KB_PG_INITIALIZE_SCHEMA:true}
+      embedding:
+        enabled: ${QUILLLOOM_KB_EMBEDDING_ENABLED:false}
+        base-url: ${QUILLLOOM_KB_EMBEDDING_BASE_URL:""}
+        api-key: ${QUILLLOOM_KB_EMBEDDING_API_KEY:""}
+        model-name: ${QUILLLOOM_KB_EMBEDDING_MODEL_NAME:""}
+        log-requests: ${QUILLLOOM_KB_EMBEDDING_LOG_REQUESTS:false}
+        log-responses: ${QUILLLOOM_KB_EMBEDDING_LOG_RESPONSES:false}
+        timeout-seconds: ${QUILLLOOM_KB_EMBEDDING_TIMEOUT_SECONDS:60}
+      retrieval:
+        assembly:
+          direct-chunk-match-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_DIRECT_CHUNK_MATCH_WEIGHT:100}
+          exact-anchor-match-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_EXACT_ANCHOR_MATCH_WEIGHT:40}
+          query-anchor-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_QUERY_ANCHOR_WEIGHT:12}
+          query-keyword-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_QUERY_KEYWORD_WEIGHT:8}
+          title-text-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_TITLE_TEXT_WEIGHT:6}
+          content-text-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_CONTENT_TEXT_WEIGHT:4}
+          anchor-hint-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_ANCHOR_HINT_WEIGHT:10}
+          anchor-title-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_ANCHOR_TITLE_WEIGHT:5}
+          preferred-type-weight: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_PREFERRED_TYPE_WEIGHT:16}
+          vector-similarity-scale: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_VECTOR_SIMILARITY_SCALE:30}
+          vector-preferred-type-bonus: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_VECTOR_PREFERRED_TYPE_BONUS:8}
+          vector-direct-chunk-bonus: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_VECTOR_DIRECT_CHUNK_BONUS:12}
+          vector-recall-multiplier: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_VECTOR_RECALL_MULTIPLIER:3}
+          default-limit: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_DEFAULT_LIMIT:6}
+          default-per-type-limit: ${QUILLLOOM_KB_RETRIEVAL_ASSEMBLY_DEFAULT_PER_TYPE_LIMIT:2}
+        supplemental-lookup:
+          direct-chunk-match-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_DIRECT_CHUNK_MATCH_WEIGHT:60}
+          exact-anchor-match-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_EXACT_ANCHOR_MATCH_WEIGHT:10}
+          query-anchor-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_QUERY_ANCHOR_WEIGHT:14}
+          query-keyword-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_QUERY_KEYWORD_WEIGHT:10}
+          title-text-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_TITLE_TEXT_WEIGHT:6}
+          content-text-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_CONTENT_TEXT_WEIGHT:4}
+          anchor-hint-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_ANCHOR_HINT_WEIGHT:12}
+          anchor-title-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_ANCHOR_TITLE_WEIGHT:6}
+          preferred-type-weight: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_PREFERRED_TYPE_WEIGHT:18}
+          vector-similarity-scale: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_VECTOR_SIMILARITY_SCALE:34}
+          vector-preferred-type-bonus: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_VECTOR_PREFERRED_TYPE_BONUS:10}
+          vector-direct-chunk-bonus: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_VECTOR_DIRECT_CHUNK_BONUS:8}
+          vector-recall-multiplier: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_VECTOR_RECALL_MULTIPLIER:4}
+          default-limit: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_DEFAULT_LIMIT:3}
+          default-per-type-limit: ${QUILLLOOM_KB_RETRIEVAL_SUPPLEMENTAL_DEFAULT_PER_TYPE_LIMIT:3}
+    book-analysis:
+      llm:
+        enabled: ${QUILLLOOM_PREPROCESS_BOOK_ANALYSIS_LLM_ENABLED:false}
+        base-url: ${QUILLLOOM_PREPROCESS_BOOK_ANALYSIS_LLM_BASE_URL:""}
+        api-key: ${QUILLLOOM_PREPROCESS_BOOK_ANALYSIS_LLM_API_KEY:""}
+        model-name: ${QUILLLOOM_PREPROCESS_BOOK_ANALYSIS_LLM_MODEL_NAME:""}
+        log-requests: ${QUILLLOOM_PREPROCESS_BOOK_ANALYSIS_LLM_LOG_REQUESTS:false}
+        log-responses: ${QUILLLOOM_PREPROCESS_BOOK_ANALYSIS_LLM_LOG_RESPONSES:false}
+    coarse-chunk-planning:
+      llm:
+        enabled: ${QUILLLOOM_PREPROCESS_COARSE_CHUNK_PLANNING_LLM_ENABLED:false}
+        base-url: ${QUILLLOOM_PREPROCESS_COARSE_CHUNK_PLANNING_LLM_BASE_URL:""}
+        api-key: ${QUILLLOOM_PREPROCESS_COARSE_CHUNK_PLANNING_LLM_API_KEY:""}
+        model-name: ${QUILLLOOM_PREPROCESS_COARSE_CHUNK_PLANNING_LLM_MODEL_NAME:""}
+        log-requests: ${QUILLLOOM_PREPROCESS_COARSE_CHUNK_PLANNING_LLM_LOG_REQUESTS:false}
+        log-responses: ${QUILLLOOM_PREPROCESS_COARSE_CHUNK_PLANNING_LLM_LOG_RESPONSES:false}
+    chunk-segmentation:
+      llm:
+        enabled: ${QUILLLOOM_PREPROCESS_CHUNK_SEGMENTATION_LLM_ENABLED:false}
+        base-url: ${QUILLLOOM_PREPROCESS_CHUNK_SEGMENTATION_LLM_BASE_URL:""}
+        api-key: ${QUILLLOOM_PREPROCESS_CHUNK_SEGMENTATION_LLM_API_KEY:""}
+        model-name: ${QUILLLOOM_PREPROCESS_CHUNK_SEGMENTATION_LLM_MODEL_NAME:""}
+        log-requests: ${QUILLLOOM_PREPROCESS_CHUNK_SEGMENTATION_LLM_LOG_REQUESTS:false}
+        log-responses: ${QUILLLOOM_PREPROCESS_CHUNK_SEGMENTATION_LLM_LOG_RESPONSES:false}
+    chunk-annotation:
+      llm:
+        enabled: ${QUILLLOOM_PREPROCESS_CHUNK_ANNOTATION_LLM_ENABLED:false}
+        base-url: ${QUILLLOOM_PREPROCESS_CHUNK_ANNOTATION_LLM_BASE_URL:""}
+        api-key: ${QUILLLOOM_PREPROCESS_CHUNK_ANNOTATION_LLM_API_KEY:""}
+        model-name: ${QUILLLOOM_PREPROCESS_CHUNK_ANNOTATION_LLM_MODEL_NAME:""}
+        log-requests: ${QUILLLOOM_PREPROCESS_CHUNK_ANNOTATION_LLM_LOG_REQUESTS:false}
+        log-responses: ${QUILLLOOM_PREPROCESS_CHUNK_ANNOTATION_LLM_LOG_RESPONSES:false}
+    knowledge-search:
+      searxng:
+        enabled: ${QUILLLOOM_SEARXNG_ENABLED:false}
+        base-url: ${QUILLLOOM_SEARXNG_BASE_URL:http://localhost:8888/search}
+        format: ${QUILLLOOM_SEARXNG_FORMAT:json}
+        language: ${QUILLLOOM_SEARXNG_LANGUAGE:zh-CN}
+        categories: []
+        engines: []
+        page-no: ${QUILLLOOM_SEARXNG_PAGE_NO:1}
+        max-results: ${QUILLLOOM_SEARXNG_MAX_RESULTS:3}
+        api-key: ${QUILLLOOM_SEARXNG_API_KEY:""}
+        api-key-header-name: ${QUILLLOOM_SEARXNG_API_KEY_HEADER_NAME:Authorization}
+        api-key-prefix: ${QUILLLOOM_SEARXNG_API_KEY_PREFIX:"Bearer "}
+        timeout-seconds: ${QUILLLOOM_SEARXNG_TIMEOUT_SECONDS:20}
+      organizer:
+        llm:
+          enabled: ${QUILLLOOM_KNOWLEDGE_ORGANIZER_LLM_ENABLED:false}
+          base-url: ${QUILLLOOM_KNOWLEDGE_ORGANIZER_LLM_BASE_URL:""}
+          api-key: ${QUILLLOOM_KNOWLEDGE_ORGANIZER_LLM_API_KEY:""}
+          model-name: ${QUILLLOOM_KNOWLEDGE_ORGANIZER_LLM_MODEL_NAME:""}
+          log-requests: ${QUILLLOOM_KNOWLEDGE_ORGANIZER_LLM_LOG_REQUESTS:false}
+          log-responses: ${QUILLLOOM_KNOWLEDGE_ORGANIZER_LLM_LOG_RESPONSES:false}
+  translation:
+    chunk-translation:
+      llm:
+        enabled: ${QUILLLOOM_TRANSLATION_CHUNK_TRANSLATION_LLM_ENABLED:false}
+        base-url: ${QUILLLOOM_TRANSLATION_CHUNK_TRANSLATION_LLM_BASE_URL:""}
+        api-key: ${QUILLLOOM_TRANSLATION_CHUNK_TRANSLATION_LLM_API_KEY:""}
+        model-name: ${QUILLLOOM_TRANSLATION_CHUNK_TRANSLATION_LLM_MODEL_NAME:""}
+        log-requests: ${QUILLLOOM_TRANSLATION_CHUNK_TRANSLATION_LLM_LOG_REQUESTS:false}
+        log-responses: ${QUILLLOOM_TRANSLATION_CHUNK_TRANSLATION_LLM_LOG_RESPONSES:false}
