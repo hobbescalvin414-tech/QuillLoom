@@ -41,56 +41,83 @@ public class RevisionSelfCheckPromptBuilder {
         Objects.requireNonNull(draft, "draft");
 
         return """
-                [Current State]
-                - projectId: %s
-                - focus: %s
-                - strategy: %s
-                - sourceText: %s
-                - currentTranslatedText: %s
-                - confirmedTermUpdates: %s
+                [Self-Check Objective]
+                This self-check must evaluate the draft against the current Revision Target, not as a generic quality review.
+
+                [Revision Target]
+                - current revision direction: %s
+                - current chunk sourceText: %s
+                - current chunk currentTranslatedText: %s
+                - confirmed-term constraints for this round: %s
+                - key rationales from the current draft: %s
+                - residual risks from the current draft: %s
+
+                [Self-Check Task]
+                You are only checking whether the revision draft is ready for submission. Do not directly trigger completion.
+                Check whether the current revised draft:
+                1. has fixed each must-fix item in the current Revision Target;
+                2. satisfies the confirmed-term constraints in the current Revision Target;
+                3. addresses previous findings one by one if previous findings exist;
+                4. has not introduced any new obvious semantic error;
+                5. remains consistent with the working-set context;
+                6. is ready to be considered for completion.
+
+                [Current Draft]
+                - formalTranslation: %s
+                - revisionMode: %s
 
                 [Working Set Context]
                 %s
 
-                [Draft]
-                - formalTranslation: %s
-                - revisionMode: %s
-                - keyRationales:
-                %s
-                - residualRisks:
+                [Previous Findings]
                 %s
 
-                [Previous Self-Check Findings]
-                %s
-
-                [Required Checks]
-                1. Verify that formalTranslation is the complete final translation for the current chunk, not a partial fragment or diff.
-                2. Verify that formalTranslation follows the confirmed terms present in this round's evidence.
-                3. If currentTranslatedText conflicts with confirmed terms, verify that the draft has fixed that conflict.
-                4. If previous findings are not empty, verify that the draft addresses them one by one.
-                5. If any check fails, you must return passed=false and explain the reason in findings.
+                [Self-Check Constraints]
+                Output only the self-check result. Do not treat it as a completion action.
 
                 [Output Contract]
-                Return exactly one JSON object and do not add explanatory text outside JSON:
-                {
-                  "passed": true,
-                  "stopReason": "",
-                  "findings": ["issues found by self-check"]
-                }
+                Output exactly one JSON object. The fields must be:
+                - passed
+                - stopReason
+                - findings
+
+                Requirements:
+                - passed must be true or false
+                - stopReason must be a string; it may be empty when the check passes
+                - findings must be an array; when the check fails, list the failed items
                 """.formatted(
-                session.projectId(),
-                session.focus(),
-                strategy,
+                strategy.name(),
                 normalizeText(chunk.sourceText()),
                 normalizeText(chunk.effectiveTranslatedText()),
-                chunk.confirmedTermUpdates(),
-                renderWorkingSetContext(session),
-                draft.formalTranslation(),
+                summarizeConfirmedTermConstraints(session, chunk),
+                summarizeList(draft.keyRationales()),
+                summarizeList(draft.residualRisks()),
+                normalizeText(draft.formalTranslation()),
                 draft.revisionMode(),
-                renderList(draft.keyRationales()),
-                renderList(draft.residualRisks()),
+                renderWorkingSetContext(session),
                 renderList(previousFindings)
         );
+    }
+
+    private static String summarizeConfirmedTermConstraints(PostDraftReviewSession session,
+                                                            PostDraftChunkRecord chunk) {
+        List<String> constraints = new ArrayList<>();
+        if (!chunk.confirmedTermUpdates().isEmpty()) {
+            constraints.add(chunk.confirmedTermUpdates().toString());
+        }
+        for (ReviewContextChunkSnapshot snapshot : session.workingSetContext().snapshots()) {
+            if (!snapshot.confirmedTermUpdates().isEmpty()) {
+                constraints.add(snapshot.confirmedTermUpdates().toString());
+            }
+        }
+        return constraints.isEmpty() ? "(none)" : String.join("; ", constraints);
+    }
+
+    private static String summarizeList(List<String> items) {
+        if (items == null || items.isEmpty()) {
+            return "(none)";
+        }
+        return String.join("; ", items);
     }
 
     private static String renderList(List<String> items) {

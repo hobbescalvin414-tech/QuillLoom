@@ -15,27 +15,42 @@ import java.util.stream.Collectors;
 
 public class ConsoleReviewRuntimeVisualizer implements ReviewRuntimeVisualizer {
 
+    public enum ConsoleMode {
+        OFF,
+        COMPACT,
+        TRACE
+    }
+
     private final PrintStream out;
     private final int previewMaxLength;
+    private final ConsoleMode consoleMode;
 
     public ConsoleReviewRuntimeVisualizer() {
-        this(System.out, 120);
+        this(System.out, 120, ConsoleMode.COMPACT);
     }
 
     public ConsoleReviewRuntimeVisualizer(PrintStream out) {
-        this(out, 120);
+        this(out, 120, ConsoleMode.COMPACT);
     }
 
     public ConsoleReviewRuntimeVisualizer(PrintStream out, int previewMaxLength) {
+        this(out, previewMaxLength, ConsoleMode.COMPACT);
+    }
+
+    public ConsoleReviewRuntimeVisualizer(PrintStream out, int previewMaxLength, ConsoleMode consoleMode) {
         this.out = Objects.requireNonNull(out, "out");
         if (previewMaxLength < 0) {
             throw new IllegalArgumentException("previewMaxLength must not be negative");
         }
         this.previewMaxLength = previewMaxLength;
+        this.consoleMode = Objects.requireNonNull(consoleMode, "consoleMode");
     }
 
     @Override
     public void projectStarted(ProjectReviewRuntimeSession runtime) {
+        if (consoleMode == ConsoleMode.OFF) {
+            return;
+        }
         printLine(
                 "project_started",
                 "projectId=" + safe(runtime.projectId()),
@@ -46,23 +61,57 @@ public class ConsoleReviewRuntimeVisualizer implements ReviewRuntimeVisualizer {
 
     @Override
     public void focusSelected(ProjectReviewRuntimeSession runtime) {
+        if (consoleMode != ConsoleMode.TRACE) {
+            return;
+        }
         printLine(
                 "focus_selected",
                 "projectId=" + safe(runtime.projectId()),
                 "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
-                "workingSet=" + formatList(runtime.workingSet().chunkIds()),
+                "workingSet=" + formatList(ReviewWorkingSetCanonicalView.chunkIds(runtime)),
                 "pending=" + runtime.pendingChunkIds().size(),
                 "completed=" + runtime.completedChunkOutcomes().size()
         );
     }
 
     @Override
+    public void focusRoundStarted(ProjectReviewRuntimeSession runtime) {
+        if (consoleMode != ConsoleMode.TRACE) {
+            return;
+        }
+        printLine(
+                "focus_round_started",
+                "projectId=" + safe(runtime.projectId()),
+                "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
+                "round=" + runtime.currentFocusRound()
+        );
+    }
+
+    @Override
+    public void decisionProduced(ProjectReviewRuntimeSession runtime, ReviewToolDecision decision) {
+        if (consoleMode != ConsoleMode.TRACE) {
+            return;
+        }
+        printLine(
+                "decision_produced",
+                "projectId=" + safe(runtime.projectId()),
+                "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
+                "tool=" + safe(decision.toolName()),
+                "arguments=" + preview(String.valueOf(decision.arguments())),
+                "reason=" + preview(decision.reason())
+        );
+    }
+
+    @Override
     public void toolCalled(ProjectReviewRuntimeSession runtime, ReviewToolDecision decision) {
+        if (consoleMode == ConsoleMode.OFF) {
+            return;
+        }
         printLine(
                 "tool_called",
                 "projectId=" + safe(runtime.projectId()),
                 "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
-                "workingSet=" + formatList(runtime.workingSet().chunkIds()),
+                "workingSet=" + formatList(ReviewWorkingSetCanonicalView.chunkIds(runtime)),
                 "tool=" + safe(decision.toolName()),
                 "arguments=" + preview(String.valueOf(decision.arguments())),
                 "reason=" + preview(decision.reason())
@@ -72,6 +121,9 @@ public class ConsoleReviewRuntimeVisualizer implements ReviewRuntimeVisualizer {
     @Override
     public void toolCompleted(ProjectReviewRuntimeSession beforeRuntime,
                               ReviewToolExecutionResult executionResult) {
+        if (consoleMode == ConsoleMode.OFF) {
+            return;
+        }
         ProjectReviewRuntimeSession afterRuntime = executionResult.nextRuntime();
         String status = executionResult.success() ? "success" : "rejected";
         String detail = executionResult.success()
@@ -84,7 +136,7 @@ public class ConsoleReviewRuntimeVisualizer implements ReviewRuntimeVisualizer {
                 "tool=" + safe(executionResult.toolCall().toolName()),
                 "status=" + status,
                 "summary=" + preview(detail),
-                "workingSet=" + formatList(afterRuntime.workingSet().chunkIds())
+                "workingSet=" + formatList(ReviewWorkingSetCanonicalView.chunkIds(afterRuntime))
         );
 
         List<String> completedChunkIds = completedChunkIds(beforeRuntime, afterRuntime);
@@ -112,7 +164,69 @@ public class ConsoleReviewRuntimeVisualizer implements ReviewRuntimeVisualizer {
     }
 
     @Override
+    public void repairTriggered(ProjectReviewRuntimeSession runtime,
+                                String repairKind,
+                                String detail) {
+        if (consoleMode != ConsoleMode.TRACE) {
+            return;
+        }
+        printLine(
+                "repair_triggered",
+                "projectId=" + safe(runtime.projectId()),
+                "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
+                "repairKind=" + safe(repairKind),
+                "detail=" + preview(detail)
+        );
+    }
+
+    @Override
+    public void toolRejected(ProjectReviewRuntimeSession runtime,
+                             String detail) {
+        if (consoleMode != ConsoleMode.TRACE) {
+            return;
+        }
+        printLine(
+                "tool_rejected",
+                "projectId=" + safe(runtime.projectId()),
+                "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
+                "detail=" + preview(detail)
+        );
+    }
+
+    @Override
+    public void containableFailureCaptured(ProjectReviewRuntimeSession runtime,
+                                           String failureCode,
+                                           String diagnosticSummary) {
+        if (consoleMode != ConsoleMode.TRACE) {
+            return;
+        }
+        printLine(
+                "containable_failure_captured",
+                "projectId=" + safe(runtime.projectId()),
+                "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
+                "failureCode=" + safe(failureCode),
+                "diagnosticSummary=" + preview(diagnosticSummary)
+        );
+    }
+
+    @Override
+    public void focusRoundFinished(ProjectReviewRuntimeSession runtime) {
+        if (consoleMode != ConsoleMode.TRACE) {
+            return;
+        }
+        printLine(
+                "focus_round_finished",
+                "projectId=" + safe(runtime.projectId()),
+                "anchor=" + safe(runtime.currentFocusChunkId().orElse("")),
+                "round=" + runtime.currentFocusRound()
+        );
+    }
+
+    @Override
     public void projectFinished(ProjectReviewRuntimeSession runtime) {
+        if (consoleMode == ConsoleMode.OFF) {
+            return;
+        }
         printLine(
                 "project_finished",
                 "projectId=" + safe(runtime.projectId()),

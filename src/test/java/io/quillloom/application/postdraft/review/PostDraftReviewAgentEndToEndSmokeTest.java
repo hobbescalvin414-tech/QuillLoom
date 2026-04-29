@@ -128,7 +128,13 @@ class PostDraftReviewAgentEndToEndSmokeTest {
                         new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-3"),
                         new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-4"),
                         new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-5"),
-                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-6")
+                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-6"),
+                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-7"),
+                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-8"),
+                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-9"),
+                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-10"),
+                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-11"),
+                        new ReviewToolDecision("nonexistent_tool", Map.of(), "reject-12")
                 ),
                 List.of(),
                 List.of(),

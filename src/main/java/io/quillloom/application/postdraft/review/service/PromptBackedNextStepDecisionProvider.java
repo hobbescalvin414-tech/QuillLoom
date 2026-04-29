@@ -177,7 +177,7 @@ public class PromptBackedNextStepDecisionProvider {
             );
         }
 
-        Optional<String> validationError = contractValidator.validate(decision, toolRegistry);
+        Optional<String> validationError = contractValidator.validateNextStepDecision(decision, toolRegistry);
         if (validationError.isPresent()) {
             String error = validationError.orElseThrow();
             if (repairsUsed >= MAX_REPAIR_ATTEMPTS) {
@@ -344,7 +344,14 @@ public class PromptBackedNextStepDecisionProvider {
             );
         }
         try {
-            return LoopOutcome.finalDecision(assembleRecordConfirmedTermsDecision(proposal), repairsUsed);
+            ReviewToolDecision assembledDecision = assembleRecordConfirmedTermsDecision(proposal);
+            Optional<String> validationError = contractValidator.validateExecutableDecision(assembledDecision, toolRegistry);
+            if (validationError.isPresent()) {
+                throw new RecordConfirmedTermsAssemblyException(
+                        "Review agent proposal -> decision assembly failed: " + validationError.orElseThrow()
+                );
+            }
+            return LoopOutcome.finalDecision(assembledDecision, repairsUsed);
         } catch (RecordConfirmedTermsAssemblyException ex) {
             if (repairsUsed >= MAX_REPAIR_ATTEMPTS) {
                 throw ex;
@@ -449,8 +456,14 @@ public class PromptBackedNextStepDecisionProvider {
                 : "(unknown)";
         return originalPrompt + """
 
-                [Decision Repair]
-                The previous tool decision is invalid. Return one valid JSON object that fixes the decision in one shot.
+                [Repair Scope]
+                The previous output is unusable. Repair only the listed format or argument errors.
+                You will also receive a summary of the current task and a summary of the unusable output.
+                Do not change the current task goal. Do not add a different tool choice or a new high-level explanation.
+
+                [Repair Findings]
+                The current problems are:
+                - structural error / missing field / extra field / invalid argument / invalid proposal DTO / proposal not applicable
                 - invalidToolName: %s
                 - validationError: %s
                 - previousArguments: %s
@@ -458,18 +471,25 @@ public class PromptBackedNextStepDecisionProvider {
                 - currentWorkingSet: %s
                 - toolArgumentRequirements: %s
                 - toolArgumentsExample: %s
+                Produce a usable result by fixing these problems.
 
-                Rules:
-                1. Return JSON only. Do not add explanation outside JSON.
-                2. If you keep the same tool, satisfy all required arguments in this response.
-                3. `arguments` may contain only fields declared by the selected tool.
-                4. If the selected tool has no arguments, return "arguments": {}.
-                5. If you switch tools, the new `toolName`, `arguments`, and `reason` must already be valid together.
+                [Repair Constraints]
+                Repair only the current error.
+                If the original tool choice is still valid, do not switch tools without cause.
+                Only use local replan when the current tool's local repair chain explicitly allows it.
+                Do not turn repair into replanning the whole task.
+                If you keep the same tool, satisfy all required arguments in this response.
+                `arguments` may contain only fields declared by the selected tool.
+                If the selected tool has no arguments, return "arguments": {}.
+                If you switch tools, the new `toolName`, `arguments`, and `reason` must already be valid together.
+                For complete_working_set, `chunkIds` must include anchorChunkId=%s, must come from currentWorkingSet=%s, and must not submit chunks read only as context evidence.
+                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
 
-                Additional rule for complete_working_set:
-                - `chunkIds` must include anchorChunkId=%s.
-                - `chunkIds` must come from currentWorkingSet=%s.
-                - do not submit chunks that were only read as context evidence.
+                [Repair Target Alignment]
+                repair must align with the current stage's original task goal, not a different task:
+                1. next-step / evaluation repair: align with the current stage's original task goal.
+                2. revision / self-check repair: align with the current Revision Target.
+                3. proposal repair: align with the current tool-specific local chain goal.
                 """.formatted(
                 invalidDecision.toolName(),
                 validationError,
@@ -502,6 +522,7 @@ public class PromptBackedNextStepDecisionProvider {
                 2. Do not return proposal DTO fields such as action / entries array.
                 3. Do not use proposal NOT_APPLICABLE as permission to force a different route without valid tool arguments.
                 4. If evidence is still insufficient for record_confirmed_terms, choose another valid investigation or evaluation step.
+                5. Human-visible summary fields such as reason / proposalReason / questionForHuman should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
                 """.formatted(
                 proposal.reason(),
                 proposal.entries(),
@@ -528,7 +549,7 @@ public class PromptBackedNextStepDecisionProvider {
                 You are now deciding only whether the current focus should record confirmed terms.
                 Return one JSON object with:
                 - action: RECORD_CONFIRMED_TERMS or NOT_APPLICABLE
-                - reason: short justification
+                - reason: short justification, default to Chinese for this project unless keeping sourceText 原文引用、术语原文、tool 名称、JSON 键名
                 - entries: array of {"sourceTerm":"...","targetTerm":"..."}
 
                 Narrow routing constraints:
@@ -537,6 +558,7 @@ public class PromptBackedNextStepDecisionProvider {
                 3. If the current focus does not support recording, return action=NOT_APPLICABLE and entries=[].
                 4. If action=RECORD_CONFIRMED_TERMS, entries must be non-empty and every pair must stay inside the current workingSet evidence scope.
                 5. Keep pair extraction explicit. Do not explain pairs only in reason.
+                6. Human-visible summary fields should follow the current translation target language by default. 当前项目优先中文。
 
                 Current stable pair signals:
                 %s
@@ -558,25 +580,41 @@ public class PromptBackedNextStepDecisionProvider {
                                                                  String rawOutput) {
         return originalPrompt + """
 
-                [Record Confirmed Terms Proposal Repair]
-                The previous proposal output is not usable.
+                [Repair Scope]
+                The previous output is unusable. Repair only the listed format or argument errors.
+                You will also receive a summary of the current task and a summary of the unusable output.
+                Do not change the current task goal. Do not add a different tool choice or a new high-level explanation.
+
+                [Repair Findings]
+                The current problems are:
+                - structural error / missing field / extra field / invalid argument / invalid proposal DTO / proposal not applicable
                 - proposalErrorType: %s
                 - proposalErrorMessage: %s
                 - rawOutput: %s
                 - anchorChunkId: %s
                 - currentWorkingSet: %s
+                Produce a usable result by fixing these problems.
 
+                [Repair Constraints]
+                Repair only the current error.
+                If the original tool choice is still valid, do not switch tools without cause.
+                Only use local replan when the current tool's local repair chain explicitly allows it.
+                Do not turn repair into replanning the whole task.
                 Return exactly one valid JSON object for proposal only:
                 - action: RECORD_CONFIRMED_TERMS or NOT_APPLICABLE
-                - reason: short justification
+                - reason: short justification, default to Chinese for this project unless keeping sourceText 原文引用、术语原文、tool 名称、JSON 键名
                 - entries: [{"sourceTerm":"...","targetTerm":"..."}]
+                Do not return final tool arguments or arguments.entries map here.
+                If action=RECORD_CONFIRMED_TERMS, entries must be non-empty.
+                If action=NOT_APPLICABLE, entries must be [].
+                Keep pair extraction explicit and conflict-free.
+                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
 
-                Rules:
-                1. Do not return final tool arguments.
-                2. Do not return arguments.entries map here.
-                3. If action=RECORD_CONFIRMED_TERMS, entries must be non-empty.
-                4. If action=NOT_APPLICABLE, entries must be [].
-                5. Keep pair extraction explicit and conflict-free.
+                [Repair Target Alignment]
+                repair must align with the current stage's original task goal, not a different task:
+                1. next-step / evaluation repair: align with the current stage's original task goal.
+                2. revision / self-check repair: align with the current Revision Target.
+                3. proposal repair: align with the current tool-specific local chain goal.
                 """.formatted(
                 errorType,
                 errorMessage == null ? "(none)" : errorMessage,
@@ -685,21 +723,39 @@ public class PromptBackedNextStepDecisionProvider {
                 .orElse("(no tool argument summary)");
         return originalPrompt + """
 
-                [Structured Output Repair]
-                The previous response could not be parsed as a valid JSON tool decision. Return one valid JSON object.
+                [Repair Scope]
+                The previous output is unusable. Repair only the listed format or argument errors.
+                You will also receive a summary of the current task and a summary of the unusable output.
+                Do not change the current task goal. Do not add a different tool choice or a new high-level explanation.
+
+                [Repair Findings]
+                The current problems are:
+                - structural error / missing field / extra field / invalid argument / invalid proposal DTO / proposal not applicable
                 - structuredOutputError: %s
                 - anchorChunkId: %s
                 - currentWorkingSet: %s
                 - toolArgumentSummary: %s
+                Produce a usable result by fixing these problems.
 
-                Rules:
-                1. Return JSON only. Do not add explanation outside JSON.
-                2. `arguments` must be an object. Do not return `null`.
-                3. If you choose `complete_working_set`, include `chunkIds`, and `chunkIds` must include the current anchorChunkId.
-                4. If you choose `read_previous_chunks` or `read_next_chunks`, include `count`.
-                5. `arguments` may contain only fields declared by the selected tool.
-                6. If the selected tool has no arguments, return "arguments": {}.
-                7. Do not return a partial fix. The final `toolName`, `arguments`, and `reason` must already be valid together.
+                [Repair Constraints]
+                Repair only the current error.
+                If the original tool choice is still valid, do not switch tools without cause.
+                Only use local replan when the current tool's local repair chain explicitly allows it.
+                Do not turn repair into replanning the whole task.
+                Return JSON only. Do not add explanation outside JSON.
+                `arguments` must be an object. Do not return `null`.
+                If you choose `complete_working_set`, include `chunkIds`, and `chunkIds` must include the current anchorChunkId.
+                If you choose `read_previous_chunks` or `read_next_chunks`, include `count`.
+                `arguments` may contain only fields declared by the selected tool.
+                If the selected tool has no arguments, return "arguments": {}.
+                Do not return a partial fix. The final `toolName`, `arguments`, and `reason` must already be valid together.
+                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
+
+                [Repair Target Alignment]
+                repair must align with the current stage's original task goal, not a different task:
+                1. next-step / evaluation repair: align with the current stage's original task goal.
+                2. revision / self-check repair: align with the current Revision Target.
+                3. proposal repair: align with the current tool-specific local chain goal.
                 """.formatted(
                 errorMessage == null ? "(none)" : errorMessage,
                 session.focus().chunkId(),

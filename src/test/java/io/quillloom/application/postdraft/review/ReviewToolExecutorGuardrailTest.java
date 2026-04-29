@@ -870,18 +870,32 @@ class ReviewToolExecutorGuardrailTest {
 
     @Test
     void shouldExposeFullContextChunkSnapshotWhenReadingAdjacentChunks() {
-        InMemoryReader reader = new InMemoryReader(List.of(new PostDraftChunkRecord(
-                "chunk-1",
-                1,
-                "block-1",
-                "Louki looked back.",
-                "Louki looked back in translation.",
-                "keep action continuity",
-                List.of(new TranslationDecisionNote("FLOW", "anchor", "need street context", "read adjacent chunk")),
-                Map.of("Louki", "Louki CN"),
-                List.of(new TranslationCandidateUpdate("Harbor Master", "Harbor Master CN", "keep consistent", false)),
-                new ChunkTransitionNote("previous sentence ends motion", "next sentence introduces title", false)
-        )));
+        InMemoryReader reader = new InMemoryReader(List.of(
+                new PostDraftChunkRecord(
+                        "chunk-1",
+                        1,
+                        "block-1",
+                        "Louki looked back.",
+                        "Louki looked back in translation.",
+                        "keep action continuity",
+                        List.of(new TranslationDecisionNote("FLOW", "anchor", "need street context", "read adjacent chunk")),
+                        Map.of("Louki", "Louki CN"),
+                        List.of(new TranslationCandidateUpdate("Harbor Master", "Harbor Master CN", "keep consistent", false)),
+                        new ChunkTransitionNote("previous sentence ends motion", "next sentence introduces title", false)
+                ),
+                new PostDraftChunkRecord(
+                        "chunk-2",
+                        2,
+                        "block-1",
+                        "He answered from the doorway.",
+                        "He answered from the doorway in translation.",
+                        "confirm speaker continuity",
+                        List.of(),
+                        Map.of(),
+                        List.of(),
+                        new ChunkTransitionNote("continues dialogue", "", false)
+                )
+        ));
         ReviewToolExecutor executor = newExecutor(reader);
         ProjectReviewRuntimeSession runtime = initialRuntime(reader, "chunk-1");
 
@@ -960,6 +974,78 @@ class ReviewToolExecutorGuardrailTest {
         PostDraftReviewSession nextSession = result.nextRuntime().currentFocusSession().orElseThrow();
         assertEquals(Set.of("chunk-1", "chunk-2"), nextSession.readInFocusChunkIds());
         assertTrue(nextSession.verifiedInFocusChunkIds().isEmpty());
+    }
+
+    @Test
+    void shouldRejectReadNextChunksWhenBoundaryWindowCannotIntroduceAnyNewChunk() {
+        InMemoryReader reader = new InMemoryReader(List.of(
+                chunk("chunk-1", 1, "translated-1"),
+                chunk("chunk-2", 2, "translated-2")
+        ));
+        ReviewToolExecutor executor = newExecutor(reader);
+        ProjectReviewRuntimeSession runtime = ProjectReviewRuntimeSession.initialize(
+                "project-1",
+                List.of("chunk-2")
+        ).withSelectedFocus("chunk-2");
+        PostDraftReviewSession session = new PostDraftReviewSessionFactory().createProjectFocusSession(
+                "project-1",
+                "operator note",
+                reader.loadChunkById("project-1", "chunk-2").orElseThrow(),
+                new PostDraftReviewProblemClassifier().classify(reader.loadChunkById("project-1", "chunk-2").orElseThrow()),
+                List.of("seed")
+        ).withWorkingSet(io.quillloom.application.postdraft.review.model.ReviewWorkingSet.fromAnchor("chunk-2"))
+                .withBoundaryWindow(new ReviewBoundaryWindow(List.of(
+                        new ReviewContextChunkSnapshot("chunk-2", 2, "source-2", "translated-2", "", List.of(), List.of(), "", true)
+                )));
+        runtime = runtime.withInvestigatingFocusSession(session, 0);
+
+        ReviewToolExecutionResult result = executor.execute(
+                runtime,
+                new ReviewToolDecision("read_next_chunks", Map.of("count", 1), "need right context")
+        );
+
+        assertFalse(result.success());
+        assertEquals("redundant_adjacent_read", result.rejection().rejectionReason());
+        PostDraftReviewSession nextSession = result.nextRuntime().currentFocusSession().orElseThrow();
+        assertTrue(nextSession.transcriptStore().entries().stream()
+                .anyMatch(entry -> entry.contains("local_replan_hint")));
+    }
+
+    @Test
+    void shouldRejectReadNextChunksWhenReaderReturnsOnlyAlreadyLoadedWindow() {
+        InMemoryReader reader = new InMemoryReader(List.of(
+                chunk("chunk-1", 1, "translated-1"),
+                chunk("chunk-2", 2, "translated-2")
+        ));
+        ReviewToolExecutor executor = newExecutor(reader);
+        ProjectReviewRuntimeSession runtime = ProjectReviewRuntimeSession.initialize(
+                "project-1",
+                List.of("chunk-1")
+        ).withSelectedFocus("chunk-1");
+        PostDraftReviewSession session = new PostDraftReviewSessionFactory().createProjectFocusSession(
+                "project-1",
+                "operator note",
+                reader.loadChunkById("project-1", "chunk-1").orElseThrow(),
+                new PostDraftReviewProblemClassifier().classify(reader.loadChunkById("project-1", "chunk-1").orElseThrow()),
+                List.of("seed")
+        ).withWorkingSet(io.quillloom.application.postdraft.review.model.ReviewWorkingSet.fromAnchor("chunk-1")
+                .expandTo(List.of("chunk-1", "chunk-2")))
+                .withBoundaryWindow(new ReviewBoundaryWindow(List.of(
+                        new ReviewContextChunkSnapshot("chunk-1", 1, "source-1", "translated-1", "", List.of(), List.of(), "", true),
+                        new ReviewContextChunkSnapshot("chunk-2", 2, "source-2", "translated-2", "", List.of(), List.of(), "", false)
+                )));
+        runtime = runtime.withInvestigatingFocusSession(session, 0);
+
+        ReviewToolExecutionResult result = executor.execute(
+                runtime,
+                new ReviewToolDecision("read_next_chunks", Map.of("count", 1), "need right context")
+        );
+
+        assertFalse(result.success());
+        assertEquals("redundant_adjacent_read", result.rejection().rejectionReason());
+        PostDraftReviewSession nextSession = result.nextRuntime().currentFocusSession().orElseThrow();
+        assertTrue(nextSession.transcriptStore().entries().stream()
+                .anyMatch(entry -> entry.contains("local_replan_hint")));
     }
 
     @Test

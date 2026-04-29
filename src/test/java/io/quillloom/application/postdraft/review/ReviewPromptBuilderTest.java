@@ -1,5 +1,6 @@
 package io.quillloom.application.postdraft.review;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quillloom.application.postdraft.review.model.PostDraftReviewSession;
 import io.quillloom.application.postdraft.review.model.ReviewAgentAction;
 import io.quillloom.application.postdraft.review.model.ReviewAgentState;
@@ -19,8 +20,10 @@ import io.quillloom.application.postdraft.review.prompt.RevisionPromptBuilder;
 import io.quillloom.application.postdraft.review.prompt.RevisionSelfCheckPromptBuilder;
 import io.quillloom.application.postdraft.review.service.ReviewToolRegistry;
 import io.quillloom.domain.postdraft.PostDraftChunkRecord;
+import io.quillloom.infrastructure.postdraft.review.OpenAiCompatibleReviewAgentStructuredGenerationClient;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -89,43 +92,30 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
-    void shouldRenderPerToolArgumentExamplesInSystemPrompt() {
+    void shouldShrinkSystemPromptToLayerAWithoutLegacyAvailableToolsManual() {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
-        assertTrue(prompt.contains("read_confirmed_terms"));
-        assertTrue(prompt.contains("\"sourceTerms\""));
-        assertTrue(prompt.contains("complete_working_set"));
-        assertTrue(prompt.contains("\"chunkIds\""));
-        assertTrue(prompt.contains("draft_revision"));
-        assertTrue(prompt.contains("arguments={}"));
+        assertTrue(prompt.contains("[Agent Role]"));
+        assertTrue(prompt.contains("[Global Hard Rules]"));
+        assertTrue(prompt.contains("[Authority Rules]"));
+        assertTrue(prompt.contains("[Global Working Discipline]"));
+        assertTrue(prompt.contains("[Global Completion / Escalation Rules]"));
+        assertTrue(prompt.contains("[Output Contract]"));
+        assertFalse(prompt.contains("[Available Tools]"));
+        assertFalse(prompt.contains("Tool: read_confirmed_terms"));
         assertNoMojibake(prompt);
     }
 
     @Test
-    void shouldRenderLiteraryTranslationReviewerPositioningInSystemPrompt() {
+    void shouldUseRefactorDesignEnglishForSystemPromptHardRules() {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
-        assertTrue(prompt.contains("literary translation review specialist"));
-        assertTrue(prompt.contains("not re-running the full translation pipeline"));
-        assertTrue(prompt.contains("naming consistency"));
-        assertTrue(prompt.contains("workingSet submission"));
-    }
-
-    @Test
-    void shouldRenderFormalToolOperatingRules() {
-        String prompt = new ReviewAgentSystemPromptBuilder()
-                .build(ReviewToolRegistry.defaultRegistry().definitions());
-
-        assertTrue(prompt.contains("Tool: read_confirmed_terms"));
-        assertTrue(prompt.contains("When to use:"));
-        assertTrue(prompt.contains("When not to use:"));
-        assertTrue(prompt.contains("Result semantics:"));
-        assertTrue(prompt.contains("Repeat policy:"));
-        assertTrue(prompt.contains("FORBID_SAME_SIGNATURE_AFTER_SUCCESS"));
-        assertTrue(prompt.contains("Do not pre-query terms"));
-        assertTrue(prompt.contains("One confirmed-term lookup per source term is enough"));
+        assertTrue(prompt.contains("You are a literary translation review agent."));
+        assertTrue(prompt.contains("Do not treat low-priority signals as sufficient grounds for high-risk actions by themselves."));
+        assertTrue(prompt.contains("confirmedTermLookupMiss only means there is no current hit; it does not authorize writing confirmed terms."));
+        assertTrue(prompt.contains("Strategy is an evaluation result, not a completion signal."));
         assertNoMojibake(prompt);
     }
 
@@ -134,10 +124,10 @@ class ReviewPromptBuilderTest {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
-        assertTrue(prompt.contains("workingSet is the evidence scope, not the submission scope"));
-        assertTrue(prompt.contains("may contain only chunks that are still pending"));
-        assertTrue(prompt.contains("not automatically part of submission"));
-        assertTrue(prompt.contains("actually reviewed and completed in this anchor round"));
+        assertTrue(prompt.contains("[Global Completion / Escalation Rules]"));
+        assertTrue(prompt.contains("A readiness signal is only a completion candidate condition."));
+        assertTrue(prompt.contains("prefer complete_project instead of continuing the old focus"));
+        assertTrue(prompt.contains("do not call complete_working_set for the stale focus"));
     }
 
     @Test
@@ -145,13 +135,10 @@ class ReviewPromptBuilderTest {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
-        assertTrue(prompt.contains("[Input Field Authority]"));
-        assertTrue(prompt.contains("sourceText is the highest-authority evidence"));
-        assertTrue(prompt.contains("read_confirmed_terms returns project-level authoritative results"));
-        assertTrue(prompt.contains("translatorCommentary is low-priority translator commentary"));
-        assertTrue(prompt.contains("decisionNotes is low-priority draft-stage risk commentary"));
-        assertTrue(prompt.contains("transitionNote is low-priority continuity commentary"));
-        assertFalse(prompt.contains("candidateUpdates"));
+        assertTrue(prompt.contains("[Authority Rules]"));
+        assertTrue(prompt.contains("sourceText is the highest-authority textual evidence."));
+        assertTrue(prompt.contains("read_confirmed_terms is the project-level authoritative lookup."));
+        assertTrue(prompt.contains("confirmedTermLookupMiss only means there is no current hit; it does not authorize writing confirmed terms."));
     }
 
     @Test
@@ -160,10 +147,8 @@ class ReviewPromptBuilderTest {
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
         assertTrue(prompt.contains("decisionNotes / translatorCommentary / transitionNote / confirmedTermLookupMiss"));
-        assertTrue(prompt.contains("evaluate_focus"));
-        assertTrue(prompt.contains("record_confirmed_terms / draft_revision / request_human_review"));
-        assertTrue(prompt.contains("not registered yet"));
-        assertTrue(prompt.contains("not registration permission"));
+        assertTrue(prompt.contains("Do not treat low-priority signals as sufficient grounds for high-risk actions by themselves."));
+        assertTrue(prompt.contains("Strategy is an evaluation result, not a completion signal."));
     }
 
     @Test
@@ -171,11 +156,24 @@ class ReviewPromptBuilderTest {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
-        assertTrue(prompt.contains("questionForHuman"));
-        assertTrue(prompt.contains("requestReason"));
-        assertTrue(prompt.contains("requestNote"));
-        assertTrue(prompt.contains("resumeHint"));
-        assertTrue(prompt.contains("Do not use vague human questions"));
+        assertTrue(prompt.contains("Use request_human_review only for real unresolved semantics."));
+        assertTrue(prompt.contains("Do not escalate ordinary lack of evidence directly to human review."));
+    }
+
+    @Test
+    void shouldRequireChineseForHumanVisibleSummaryFieldsInSystemAndInvestigationPrompts() {
+        String systemPrompt = new ReviewAgentSystemPromptBuilder()
+                .build(ReviewToolRegistry.defaultRegistry().definitions());
+        String investigationPrompt = new InvestigationPromptBuilder()
+                .build(sampleSession(), ReviewToolRegistry.defaultRegistry().definitions(), List.of());
+
+        assertTrue(systemPrompt.contains("当前项目优先中文"));
+        assertTrue(systemPrompt.contains("reason / questionForHuman"));
+        assertTrue(systemPrompt.contains("sourceText 原文引用"));
+        assertTrue(investigationPrompt.contains("当前项目默认用中文"));
+        assertTrue(investigationPrompt.contains("reason"));
+        assertTrue(investigationPrompt.contains("questionForHuman"));
+        assertTrue(investigationPrompt.contains("tool 名称"));
     }
 
     @Test
@@ -183,17 +181,14 @@ class ReviewPromptBuilderTest {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
-        assertTrue(prompt.contains("[P0 Hard Blocks]"));
-        assertTrue(prompt.contains("confirmed-term conflict is already identified and unresolved"));
-        assertTrue(prompt.contains("do not call complete_working_set"));
-        assertTrue(prompt.contains("If there is no explicit source->target term pair"));
-        assertTrue(prompt.contains("do not call record_confirmed_terms"));
-        assertTrue(prompt.contains("If the basis is only low-priority signals"));
+        assertTrue(prompt.contains("[Global Hard Rules]"));
+        assertTrue(prompt.contains("Do not call complete_working_set while an unresolved confirmed-term conflict still exists."));
+        assertTrue(prompt.contains("Do not advance into an unsupported next stage before the evidence is closed."));
         assertFalse(prompt.contains("not sharp enough"));
     }
 
     @Test
-    void shouldRenderLowPriorityEvidencePermissionBoundaryInInvestigationPrompt() {
+    void shouldRenderDecisionGateSummaryInInvestigationPrompt() {
         InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
         PostDraftReviewSession session = sampleSession();
 
@@ -203,44 +198,18 @@ class ReviewPromptBuilderTest {
                 List.of("decisionNotes=name consistency may be wrong", "confirmedTermLookupMiss=[Bernolle]")
         );
 
-        assertTrue(prompt.contains("decisionNotes / translatorCommentary / transitionNote / confirmedTermLookupMiss"));
-        assertTrue(prompt.contains("evaluate_focus"));
-        assertTrue(prompt.contains("record_confirmed_terms / draft_revision / request_human_review"));
-        assertTrue(prompt.contains("confirmedTermLookupMiss"));
-    }
-
-    @Test
-    void shouldRenderConfirmedTermsEntriesPlacementRuleInInvestigationPrompt() {
-        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
-        PostDraftReviewSession session = sampleSession();
-
-        String prompt = builder.build(
-                session,
-                ReviewToolRegistry.defaultRegistry().definitions(),
-                List.of()
-        );
-
-        assertTrue(prompt.contains("record_confirmed_terms"));
-        assertTrue(prompt.contains("arguments.entries"));
-        assertTrue(prompt.contains("not only in reason"));
-        assertTrue(prompt.contains("When toolName=record_confirmed_terms, candidate pairs must be written in arguments.entries, not only in reason."));
-    }
-
-    @Test
-    void shouldExplainQuestionForHumanRequirementInInvestigationPrompt() {
-        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
-        PostDraftReviewSession session = sampleSession();
-
-        String prompt = builder.build(
-                session,
-                ReviewToolRegistry.defaultRegistry().definitions(),
-                List.of()
-        );
-
-        assertTrue(prompt.contains("questionForHuman"));
-        assertTrue(prompt.contains("request_human_review"));
-        assertTrue(prompt.contains("not empty"));
-        assertTrue(prompt.contains("Do not use vague human questions"));
+        assertTrue(prompt.contains("[Decision Gate Summary]"));
+        assertTrue(prompt.contains("Identify the current review dimension first"));
+        assertTrue(prompt.contains("continuity gate:"));
+        assertTrue(prompt.contains("term gate:"));
+        assertTrue(prompt.contains("quality gate:"));
+        assertTrue(prompt.contains("completion gate:"));
+        assertTrue(prompt.contains("If the judgment depends on unread adjacent chunks, read the necessary chunks first."));
+        assertTrue(prompt.contains("Not looked up yet: call read_confirmed_terms first."));
+        assertTrue(prompt.contains("This dimension handles translation quality issues that can be judged directly from the current chunk's sourceText and translatedText"));
+        assertTrue(prompt.contains("Completion may become a candidate next step only when a readiness signal is present"));
+        assertFalse(prompt.contains("[Action Tree]"));
+        assertFalse(prompt.contains("When toolName=record_confirmed_terms, candidate pairs must be written in arguments.entries, not only in reason."));
     }
 
     @Test
@@ -275,12 +244,10 @@ class ReviewPromptBuilderTest {
         String investigationPrompt = new InvestigationPromptBuilder()
                 .build(sampleSession(), ReviewToolRegistry.defaultRegistry().definitions(), List.of());
 
-        assertTrue(systemPrompt.contains("do not directly evaluate_focus or complete_working_set"));
-        assertTrue(systemPrompt.contains("expand_block_context does not replace adjacent continuity verification"));
-        assertTrue(investigationPrompt.contains("Before making any continuity judgment, first read adjacent context with tools."));
-        assertTrue(investigationPrompt.contains("In these cases, do not directly treat continuity as established."));
-        assertTrue(investigationPrompt.contains("expand_block_context"));
-        assertTrue(investigationPrompt.contains("does not replace adjacent continuity reading"));
+        assertTrue(systemPrompt.contains("If the issue depends on adjacent text, do not judge it from the anchor chunk alone."));
+        assertTrue(investigationPrompt.contains("[Decision Gate Summary]"));
+        assertTrue(investigationPrompt.contains("continuity gate:"));
+        assertTrue(investigationPrompt.contains("If the judgment depends on unread adjacent chunks, read the necessary chunks first."));
     }
 
     @Test
@@ -298,8 +265,8 @@ class ReviewPromptBuilderTest {
 
         assertTrue(prompt.contains("anchorOnlyView=true"));
         assertTrue(prompt.contains("adjacentReadCount=0"));
-        assertTrue(prompt.contains("If no adjacent context has been read yet, first call `read_previous_chunks` and/or `read_next_chunks`."));
-        assertTrue(prompt.contains("Do not treat anchor-only reading as sufficient in that case."));
+        assertTrue(prompt.contains("continuity gate:"));
+        assertTrue(prompt.contains("Before the required adjacent reading is complete, do not evaluate_focus and do not complete_working_set."));
     }
 
     @Test
@@ -319,8 +286,8 @@ class ReviewPromptBuilderTest {
 
         assertTrue(prompt.contains("hasPreviousRead=false"));
         assertTrue(prompt.contains("hasNextRead=true"));
-        assertTrue(prompt.contains("Do not treat a single-sided adjacent read as sufficient when the unresolved issue still depends on the missing side."));
-        assertTrue(prompt.contains("If the current judgment still depends on unread adjacent text, continue investigation."));
+        assertTrue(prompt.contains("continuity gate:"));
+        assertTrue(prompt.contains("read the necessary chunks first."));
     }
 
     @Test
@@ -332,12 +299,9 @@ class ReviewPromptBuilderTest {
         String investigationPrompt = new InvestigationPromptBuilder()
                 .build(session, ReviewToolRegistry.defaultRegistry().definitions(), List.of());
 
-        assertTrue(systemPrompt.contains("if current strategy is LIGHT_EDIT / DEEP_EDIT / RETRANSLATE"));
-        assertTrue(systemPrompt.contains("must not call complete_working_set"));
-        assertTrue(systemPrompt.contains("selfCheckPassed=true"));
-        assertTrue(systemPrompt.contains("revision_ready_for_completion"));
-        assertTrue(investigationPrompt.contains("If current strategy is `LIGHT_EDIT` / `DEEP_EDIT` / `RETRANSLATE`, you must not call `complete_working_set`"));
-        assertTrue(investigationPrompt.contains("selfCheckPassed=true"));
+        assertTrue(systemPrompt.contains("Strategy is an evaluation result, not a completion signal."));
+        assertTrue(systemPrompt.contains("A readiness signal is only a completion candidate condition."));
+        assertTrue(investigationPrompt.contains("existing signals related to revision / self-check / completion: strategy=LIGHT_EDIT"));
     }
 
     @Test
@@ -355,8 +319,8 @@ class ReviewPromptBuilderTest {
         assertTrue(prompt.contains("pendingChunkCount=0"));
         assertTrue(prompt.contains("completedChunkCount=3"));
         assertTrue(prompt.contains("currentFocusChunkStillPending=false"));
-        assertTrue(prompt.contains("Call `complete_project`"));
-        assertTrue(prompt.contains("Do not call `complete_working_set` for a focusChunk that is no longer pending."));
+        assertTrue(prompt.contains("completion gate:"));
+        assertTrue(prompt.contains("prefer complete_project."));
     }
 
     @Test
@@ -364,10 +328,8 @@ class ReviewPromptBuilderTest {
         String prompt = new ReviewAgentSystemPromptBuilder()
                 .build(ReviewToolRegistry.defaultRegistry().definitions());
 
-        assertTrue(prompt.contains("If pendingChunkCount=0"));
-        assertTrue(prompt.contains("prefer complete_project"));
-        assertTrue(prompt.contains("If currentFocusChunkStillPending=false"));
-        assertTrue(prompt.contains("do not call complete_working_set"));
+        assertTrue(prompt.contains("prefer complete_project instead of continuing the old focus"));
+        assertTrue(prompt.contains("If currentFocusChunkStillPending=false, do not call complete_working_set for the stale focus."));
     }
 
     @Test
@@ -410,7 +372,7 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
-    void shouldRenderInvestigationPromptWithNewSectionOrder() {
+    void shouldRenderInvestigationPromptWithLayerBSectionOrder() {
         InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
         PostDraftReviewSession session = sampleSession();
 
@@ -421,14 +383,14 @@ class ReviewPromptBuilderTest {
         );
 
         assertTrue(prompt.contains("[Current Facts]"));
-        assertTrue(prompt.contains("[Product Role And Core Responsibilities]"));
-        assertTrue(prompt.contains("[Action Tree]"));
+        assertTrue(prompt.contains("[Decision Gate Summary]"));
         assertTrue(prompt.contains("[Working Set Text Context]"));
         assertTrue(prompt.contains("[State Memory]"));
-        assertTrue(prompt.indexOf("[Current Facts]") < prompt.indexOf("[Product Role And Core Responsibilities]"));
-        assertTrue(prompt.indexOf("[Product Role And Core Responsibilities]") < prompt.indexOf("[Action Tree]"));
-        assertTrue(prompt.indexOf("[Action Tree]") < prompt.indexOf("[Working Set Text Context]"));
+        assertTrue(prompt.contains("[Output Reminder]"));
+        assertTrue(prompt.indexOf("[Current Facts]") < prompt.indexOf("[Decision Gate Summary]"));
+        assertTrue(prompt.indexOf("[Decision Gate Summary]") < prompt.indexOf("[Working Set Text Context]"));
         assertTrue(prompt.indexOf("[Working Set Text Context]") < prompt.indexOf("[State Memory]"));
+        assertTrue(prompt.indexOf("[State Memory]") < prompt.indexOf("[Output Reminder]"));
     }
 
     @Test
@@ -470,6 +432,62 @@ class ReviewPromptBuilderTest {
         assertTrue(prompt.contains("translatedText=translated-1"));
         assertTrue(prompt.contains("anchor=true"));
         assertTrue(prompt.contains("chunkId=chunk-2"));
+    }
+
+    @Test
+    void shouldRenderCanonicalWorkingSetOrderIntoInvestigationPrompt() {
+        InvestigationPromptBuilder builder = new InvestigationPromptBuilder();
+        PostDraftReviewSession session = sampleSession().withWorkingSetContext(new ReviewWorkingSetContext(List.of(
+                new ReviewContextChunkSnapshot(
+                        "chunk-7",
+                        7,
+                        "source-7",
+                        "translated-7",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        true
+                ),
+                new ReviewContextChunkSnapshot(
+                        "chunk-8",
+                        8,
+                        "source-8",
+                        "translated-8",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        false
+                ),
+                new ReviewContextChunkSnapshot(
+                        "chunk-6",
+                        6,
+                        "source-6",
+                        "translated-6",
+                        "",
+                        List.of(),
+                        List.of(),
+                        "",
+                        false
+                )
+        )));
+
+        String prompt = builder.build(
+                session,
+                ReviewToolRegistry.defaultRegistry().definitions(),
+                List.of("evidence-A")
+        );
+
+        int chunk6Index = prompt.indexOf("chunkId=chunk-6");
+        int chunk7Index = prompt.indexOf("chunkId=chunk-7");
+        int chunk8Index = prompt.indexOf("chunkId=chunk-8");
+        assertTrue(chunk6Index >= 0);
+        assertTrue(chunk7Index >= 0);
+        assertTrue(chunk8Index >= 0);
+        assertTrue(chunk6Index < chunk7Index);
+        assertTrue(chunk7Index < chunk8Index);
+        assertTrue(prompt.contains("anchor=true"));
     }
 
     @Test
@@ -530,7 +548,7 @@ class ReviewPromptBuilderTest {
     }
 
     @Test
-    void shouldDemoteEvidenceSummariesToStateMemoryInEvaluationPrompt() {
+    void shouldRenderEvaluationPromptWithRefactorOutputContract() {
         EvaluationPromptBuilder builder = new EvaluationPromptBuilder();
         PostDraftReviewSession session = sampleSession().withWorkingSetContext(new ReviewWorkingSetContext(List.of(
                 new ReviewContextChunkSnapshot(
@@ -552,13 +570,23 @@ class ReviewPromptBuilderTest {
                 List.of("key-evidence-1")
         );
 
-        assertTrue(prompt.contains("[State Memory]"));
-        assertTrue(prompt.contains("[Key Evidence]"));
-        assertTrue(prompt.indexOf("[Working Set Text Context]") < prompt.indexOf("[State Memory]"));
+        assertTrue(prompt.contains("[Evaluation Inputs]"));
+        assertTrue(prompt.contains("[Evaluation Handoff]"));
+        assertTrue(prompt.contains("[Evaluation Task]"));
+        assertTrue(prompt.contains("[Evaluation Constraints]"));
+        assertTrue(prompt.contains("[Output Contract]"));
+        assertTrue(prompt.contains("Key Evidence"));
+        assertTrue(prompt.contains("Conflicting Evidence"));
+        assertTrue(prompt.contains("Evidence Gaps"));
+        assertTrue(prompt.contains("recommendedStrategy"));
+        assertTrue(prompt.contains("strategyReason"));
+        assertTrue(prompt.contains("evidenceSufficiency"));
+        assertTrue(prompt.contains("continueInvestigation"));
+        assertTrue(prompt.contains("UNKNOWN / SUFFICIENT / PARTIAL / INSUFFICIENT"));
     }
 
     @Test
-    void shouldRenderRevisionPromptWithAllRequiredInputs() {
+    void shouldRenderRevisionPromptWithRevisionTarget() {
         RevisionPromptBuilder builder = new RevisionPromptBuilder();
         PostDraftReviewSession session = sampleSession().withWorkingSetContext(new ReviewWorkingSetContext(List.of(
                 new ReviewContextChunkSnapshot(
@@ -599,23 +627,22 @@ class ReviewPromptBuilderTest {
                 List.of("risk-1")
         );
 
-        assertTrue(prompt.contains("[Current Facts]"));
-        assertTrue(prompt.contains("DEEP_EDIT"));
-        assertTrue(prompt.contains("rationale-1"));
-        assertTrue(prompt.contains("risk-1"));
-        assertTrue(prompt.contains("\"formalTranslation\""));
-        assertTrue(prompt.contains("\"revisionMode\""));
-        assertTrue(prompt.contains("Le Conde etait plein."));
-        assertTrue(prompt.contains("Le Conde Cafe was crowded."));
-        assertTrue(prompt.contains("confirmedTermUpdates"));
-        assertTrue(prompt.contains("[Working Set Context]"));
-        assertTrue(prompt.contains("chunkId=chunk-2"));
-        assertTrue(prompt.contains("sourceText=Louki opened the cafe door."));
+        assertTrue(prompt.contains("[Revision Target]"));
+        assertTrue(prompt.contains("[Revision Contract]"));
+        assertTrue(prompt.contains("[Output Contract]"));
+        assertTrue(prompt.contains("issues that must be fixed in this round"));
+        assertTrue(prompt.contains("boundary that must not be expanded"));
+        assertTrue(prompt.contains("formalTranslation"));
+        assertTrue(prompt.contains("revisionMode"));
+        assertTrue(prompt.contains("keyRationales"));
+        assertTrue(prompt.contains("residualRisks"));
+        assertTrue(prompt.contains("The output must be the complete formal translation of the current chunk."));
+        assertTrue(prompt.contains("Do not output a diff, a partial fragment"));
         assertNoMojibake(prompt);
     }
 
     @Test
-    void shouldRenderSelfCheckPromptWithConfirmedTermConsistencyRules() {
+    void shouldRenderSelfCheckPromptAgainstRevisionTarget() {
         RevisionSelfCheckPromptBuilder builder = new RevisionSelfCheckPromptBuilder();
         PostDraftReviewSession session = sampleSession()
                 .withWorkingSetContext(new ReviewWorkingSetContext(List.of(
@@ -658,14 +685,42 @@ class ReviewPromptBuilderTest {
 
         String prompt = builder.build(session, chunk, ReviewStrategy.LIGHT_EDIT, draft);
 
-        assertTrue(prompt.contains("confirmed terms"));
-        assertTrue(prompt.contains("confirmedTermUpdates"));
-        assertTrue(prompt.contains("Le Conde"));
-        assertTrue(prompt.contains("Le Conde Cafe"));
-        assertTrue(prompt.contains("passed=false"));
-        assertTrue(prompt.contains("[Working Set Context]"));
-        assertTrue(prompt.contains("chunkId=chunk-2"));
-        assertTrue(prompt.contains("sourceText=Louki sat beside him."));
+        assertTrue(prompt.contains("[Self-Check Objective]"));
+        assertTrue(prompt.contains("[Self-Check Task]"));
+        assertTrue(prompt.contains("[Self-Check Constraints]"));
+        assertTrue(prompt.contains("[Output Contract]"));
+        assertTrue(prompt.contains("current Revision Target"));
+        assertTrue(prompt.contains("passed"));
+        assertTrue(prompt.contains("stopReason"));
+        assertTrue(prompt.contains("findings"));
+        assertFalse(prompt.contains("readiness"));
+    }
+
+    @Test
+    void shouldKeepArgumentRequirementsAndMinimalStaticSemanticsInInvestigationSchemaDescription() throws Exception {
+        OpenAiCompatibleReviewAgentStructuredGenerationClient client =
+                new OpenAiCompatibleReviewAgentStructuredGenerationClient(null, new ObjectMapper());
+        Method method = OpenAiCompatibleReviewAgentStructuredGenerationClient.class
+                .getDeclaredMethod("investigationSchemaDescription");
+        method.setAccessible(true);
+
+        String description = (String) method.invoke(client);
+
+        assertTrue(description.contains("Tool read_previous_chunks"));
+        assertTrue(description.contains("argumentRequirements=count: integer (required)"));
+        assertTrue(description.contains("Tool record_confirmed_terms"));
+        assertTrue(description.contains("argumentRequirements=entries: object{string:string} (required)"));
+        assertTrue(description.contains("argumentsExample={\"entries\": {"));
+        assertTrue(description.contains("<source-term>"));
+        assertTrue(description.contains("<target-term>"));
+        assertTrue(description.contains("Tool request_human_review"));
+        assertTrue(description.contains("Tool complete_working_set"));
+        assertTrue(description.contains("Tool complete_project"));
+        assertFalse(description.contains("whenToUse="));
+        assertFalse(description.contains("whenNotToUse="));
+        assertFalse(description.contains("resultSemantics="));
+        assertFalse(description.contains("repeatPolicy="));
+        assertFalse(description.contains("nextStepGuidance="));
     }
 
     private static void assertNoMojibake(String text) {

@@ -82,6 +82,9 @@ public class ProjectReviewOutputAssembler {
         if (runtime.currentFocusChunkId().isPresent()) {
             return ReviewFocus.forChunk(runtime.currentFocusChunkId().orElseThrow());
         }
+        if (!runtime.issueBacklog().openIssues().isEmpty()) {
+            return ReviewFocus.forChunk(runtime.issueBacklog().openIssues().get(0).relatedChunkId());
+        }
         if (!runtime.pendingChunkIds().isEmpty()) {
             return ReviewFocus.forChunk(runtime.pendingChunkIds().get(0));
         }

@@ -1,5 +1,6 @@
 package io.quillloom.infrastructure.postdraft.review;
 
+import io.quillloom.application.postdraft.review.service.ConsoleReviewRuntimeVisualizer;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.nio.file.Path;
@@ -7,6 +8,7 @@ import java.nio.file.Path;
 @ConfigurationProperties(prefix = "quillloom.postdraft.review.runtime")
 public class ReviewAgentRuntimeProperties {
 
+    private ConsoleReviewRuntimeVisualizer.ConsoleMode consoleMode = ConsoleReviewRuntimeVisualizer.ConsoleMode.TRACE;
     private Path sessionDirectory = Path.of("target", "review-agent-sessions");
     private Path baselineDirectory = Path.of("target", "review-agent-baselines");
     private boolean cliEnabled;
@@ -17,6 +19,14 @@ public class ReviewAgentRuntimeProperties {
     private int consolePreviewMaxLength = 120;
     private boolean promptDumpEnabled;
     private Path promptDumpDirectory = Path.of("logs", "review-agent-prompts");
+
+    public ConsoleReviewRuntimeVisualizer.ConsoleMode getConsoleMode() {
+        return consoleMode;
+    }
+
+    public void setConsoleMode(ConsoleReviewRuntimeVisualizer.ConsoleMode consoleMode) {
+        this.consoleMode = consoleMode;
+    }
 
     public Path getSessionDirectory() {
         return sessionDirectory;

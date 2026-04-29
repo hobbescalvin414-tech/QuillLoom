@@ -17,6 +17,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class ReviewToolDecisionContractValidatorTest {
 
     @Test
+    void shouldAllowRecordConfirmedTermsWithoutEntriesInNextStepMode() {
+        ReviewToolDecision decision = new ReviewToolDecision(
+                "record_confirmed_terms",
+                Map.of(),
+                "record"
+        );
+
+        assertEquals(
+                Optional.empty(),
+                new ReviewToolDecisionContractValidator().validateNextStepDecision(decision, ReviewToolRegistry.defaultRegistry())
+        );
+    }
+
+    @Test
     void shouldRejectRecordConfirmedTermsEntriesWhenEntriesIsArrayOfObjects() {
         ReviewToolDecision decision = new ReviewToolDecision(
                 "record_confirmed_terms",

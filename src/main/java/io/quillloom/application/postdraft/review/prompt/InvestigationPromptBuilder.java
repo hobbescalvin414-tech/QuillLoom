@@ -3,6 +3,7 @@ package io.quillloom.application.postdraft.review.prompt;
 import io.quillloom.application.postdraft.review.model.PostDraftReviewSession;
 import io.quillloom.application.postdraft.review.model.ReviewContextChunkSnapshot;
 import io.quillloom.application.postdraft.review.model.ReviewToolDefinition;
+import io.quillloom.application.postdraft.review.service.ReviewWorkingSetCanonicalView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -36,76 +37,34 @@ public class InvestigationPromptBuilder {
 
         return """
                 [Current Facts]
+                These are the objective facts for the current round. You may make the next-step decision only from these facts and the working-set text context.
+                - current focus and anchor chunk: %s
+                - chunk set in the current working set: %s
+                - adjacent-read status: boundaryLeftChunkId=%s, boundaryRightChunkId=%s, anchorOnlyView=%s, hasPreviousRead=%s, hasNextRead=%s, adjacentReadCount=%s
+                - pending / completed / current-focus status: pendingChunkCount=%s, completedChunkCount=%s, currentFocusChunkStillPending=%s
+                - existing signals related to revision / self-check / completion: strategy=%s, waitingForHumanReview=%s, recentLocalFailures=%s
                 - projectId: %s
-                - focus: %s
                 - observationState: %s
-                - strategy: %s
-                - workingSet: %s
-                - boundaryLeftChunkId=%s
-                - boundaryRightChunkId=%s
-                - anchorOnlyView=%s
-                - hasPreviousRead=%s
-                - hasNextRead=%s
-                - adjacentReadCount=%s
-                - pendingChunkCount=%s
-                - completedChunkCount=%s
-                - currentFocusChunkStillPending=%s
                 - operatorNote: %s
 
-                [Product Role And Core Responsibilities]
-                - You are a literary translation review specialist for the current anchor / workingSet.
-                - Your fixed responsibilities are: review translation quality, maintain naming consistency, and decide whether the current focus is ready for workingSet submission.
-                - You are not re-running the full translation pipeline and not auditing the whole project at once.
+                [Decision Gate Summary]
+                Identify the current review dimension first, then decide the next step by that dimension's gate template.
+                Use the gate template that matches the current review dimension. Do not let Java-side heuristics pre-decide the dimension for you.
+                If pendingChunkCount=0 and the project is ready, prefer complete_project.
+                Allow request_human_review only when local tools cannot close a real semantic issue.
+                %s
 
-                [Action Tree]
-                - Before making any continuity judgment, first read adjacent context with tools.
-                - Do not judge continuity from the anchor chunk alone.
-                - If the current task involves continuity, handoff, reference resolution, reply semantics, speaker/addressee relation, or narrative
-                linkage, you must read previous and/or next chunks before `evaluate_focus` or `complete_working_set`.
-                - Start adjacent reading from the current workingSet boundary.
-                - If no adjacent context has been read yet, first call `read_previous_chunks` and/or `read_next_chunks`.
-                - If adjacent context already exists, continue `read_previous_chunks` / `read_next_chunks` from the current workingSet boundary, not
-                from the raw focusChunk.
-                - `expand_block_context` adds same-block visibility only. It does not replace adjacent continuity reading and does not redefine the next
-                adjacent expansion boundary.
-                - If the current chunk is short, transitional, reply-like, elliptical, or obviously context-dependent, you must read adjacent chunks
-                before judgment.
-                - In these cases, do not directly treat continuity as established.
-                - In these cases, do not directly call `evaluate_focus`.
-                - In these cases, do not directly call `complete_working_set`.
-                - Until the relevant adjacent text has actually been read, do not claim:
-                  - continuity is established
-                  - handoff is clear
-                  - reference resolution is stable
-                  - speaker/addressee relation is clear
-                  - reply semantics are secure
-                - If the current judgment still depends on unread adjacent text, continue investigation.
-                - Do not treat anchor-only reading as sufficient in that case.
-                - Do not treat a single-sided adjacent read as sufficient when the unresolved issue still depends on the missing side.
-                - Do not treat same-block reading alone as sufficient when cross-chunk continuity is still unresolved.
-                - If current strategy is `LIGHT_EDIT` / `DEEP_EDIT` / `RETRANSLATE`, you must not call `complete_working_set` unless recent evidence
-                explicitly contains `selfCheckPassed=true` or `revision_ready_for_completion`.
-                - Strategy alone is not a completion signal.
-                - A tentative revision is not a completion signal.
-                - If a source term is visible in `sourceText`, `translatedText`, `confirmedTermUpdates`, or already-read workingSet text, you may call
-                `read_confirmed_terms` .if it does not exist there, then call `record_confirmed_terms`.
-                - Do not call `record_confirmed_terms` when the term evidence is still ambiguous, conflicting, or unstable.
-                - Do not call `request_human_review` for ordinary investigation difficulty, repair noise, or local argument mistakes.
-                - If you call `request_human_review`, `questionForHuman` must be concrete and non-empty.
-                - Do not use vague human questions such as "please help check".
-                - Ask the human to decide one specific semantics / naming / reference / speaker / addressee / translation-choice issue.
-                - You may call `complete_working_set` only when:
-                  - the required adjacent context has already been read,
-                  - continuity/context evidence is already sufficient for the translation judgment,
-                  - no unresolved high-priority issue remains,
-                  - and, for edit-style strategies, explicit revision readiness is already present.
-                - If `pendingChunkCount=0`, do not continue the current focus. Call `complete_project`.
-                - Do not call `complete_working_set` for a focusChunk that is no longer pending.
                 [Working Set Text Context]
+                This is the full text context of the current working set. Base semantic judgments primarily on sourceText and translatedText here. Do not use summary memory as a substitute for text evidence.
                 %s
 
                 [State Memory]
-                [Current Evidence]
+                This is the summary-style state memory available in the current round. Use it only to avoid repeated investigation and to understand current gaps and recent failures:
+                [Evidence Summaries]
+                %s
+                [Key Evidence Summaries]
+                %s
+                [Conflicting Evidence Summaries]
                 %s
                 [Evidence Gaps]
                 %s
@@ -113,17 +72,15 @@ public class InvestigationPromptBuilder {
                 %s
                 [Recent Local Failures]
                 %s
-                - decisionNotes / translatorCommentary / transitionNote / confirmedTermLookupMiss may support continued investigation or evaluate_focus, but they may not independently justify record_confirmed_terms / draft_revision / request_human_review.
+                These items are not a substitute for sourceText. If semantic judgment still needs text evidence, return to the working-set text context.
 
                 [Output Reminder]
-                - Return exactly one valid JSON object. The selected tool's arguments must already be valid in one shot. Example: {"toolName": "read_confirmed_terms", "arguments": {"sourceTerms": ["<source-term>"]}, "reason": "need project-level confirmed-term lookup"}
-                - When toolName=record_confirmed_terms, candidate pairs must be written in arguments.entries, not only in reason.
+                Output only the next tool decision. First make sure the tool choice and argument structure are valid. Then make sure the decision follows the current round's gates.
+                Human-visible summary fields such as reason / questionForHuman should follow the current translation target language by default. 当前项目默认用中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
+                Return exactly one valid JSON object. The selected tool's arguments must already be valid in one shot. Example: {"toolName": "read_confirmed_terms", "arguments": {"sourceTerms": ["<source-term>"]}, "reason": "need project-level confirmed-term lookup"}
                 """.formatted(
-                session.projectId(),
                 anchorChunkId,
-                session.state().name(),
-                session.strategy(),
-                session.workingSet().chunkIds(),
+                ReviewWorkingSetCanonicalView.chunkIds(session),
                 boundaryLeftChunkId(session),
                 boundaryRightChunkId(session),
                 anchorOnlyView(session),
@@ -133,9 +90,17 @@ public class InvestigationPromptBuilder {
                 renderProjectCount(projectState.pendingChunkCount()),
                 renderProjectCount(projectState.completedChunkCount()),
                 projectState.currentFocusChunkStillPending(),
+                session.strategy(),
+                session.waitingForHumanReview(),
+                summarizeList(session.diagnostics().localRejectionReasons()),
+                session.projectId(),
+                session.state().name(),
                 normalizeText(session.operatorNote()),
+                renderDecisionGateTemplates(),
                 renderWorkingSetContext(session),
                 renderList(safeEvidence),
+                renderList(session.keyEvidenceSummaries()),
+                renderList(session.conflictingEvidenceSummaries()),
                 renderList(session.evidenceGaps()),
                 renderRecentTranscript(session),
                 renderLocalFailures(session)
@@ -156,6 +121,13 @@ public class InvestigationPromptBuilder {
         return items.stream().map(item -> "- " + item).collect(Collectors.joining("\n"));
     }
 
+    private static String summarizeList(List<String> items) {
+        if (items == null || items.isEmpty()) {
+            return "(none)";
+        }
+        return items.toString();
+    }
+
     private static String renderRecentTranscript(PostDraftReviewSession session) {
         List<String> entries = session.transcriptStore().replay();
         if (entries.isEmpty()) {
@@ -170,7 +142,7 @@ public class InvestigationPromptBuilder {
     }
 
     private static String renderWorkingSetContext(PostDraftReviewSession session) {
-        List<ReviewContextChunkSnapshot> snapshots = session.workingSetContext().snapshots();
+        List<ReviewContextChunkSnapshot> snapshots = ReviewWorkingSetCanonicalView.snapshots(session);
         if (snapshots.isEmpty()) {
             return "- (none)";
         }
@@ -232,5 +204,29 @@ public class InvestigationPromptBuilder {
 
     private static String renderProjectCount(int value) {
         return value < 0 ? "-" : String.valueOf(value);
+    }
+
+    private static String renderDecisionGateTemplates() {
+        return """
+                continuity gate:
+                If the judgment depends on unread adjacent chunks, read the necessary chunks first.
+                Before the required adjacent reading is complete, do not evaluate_focus and do not complete_working_set.
+
+                term gate:
+                Not looked up yet: call read_confirmed_terms first.
+                Already looked up and already compared: do not look it up again.
+                No stable pair yet: do not record_confirmed_terms.
+                Confirmed translation conflict: do not KEEP or complete_working_set; move to evaluation or revision.
+
+                quality gate:
+                This dimension handles translation quality issues that can be judged directly from the current chunk's sourceText and translatedText, such as omission, mistranslation, semantic drift, obvious awkwardness, register mismatch, or clearly wrong wording.
+                If the judgment still depends on adjacent carry-over, referents, speaker identity, context logic, or time/space relations, do not conclude early on the quality path. Read the necessary context first.
+                Before that context dependency is removed, do not KEEP from the current chunk alone and do not complete_working_set.
+                If direct comparison is already sufficient to confirm that no quality problem exists, you may enter evaluate_focus and support KEEP.
+
+                completion gate:
+                Completion may become a candidate next step only when a readiness signal is present and there are no unresolved gaps, local failures, or high-priority issues.
+                If the project is pending-empty and project-ready, prefer complete_project.
+                """;
     }
 }

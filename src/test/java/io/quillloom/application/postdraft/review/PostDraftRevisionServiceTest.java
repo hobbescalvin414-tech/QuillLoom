@@ -184,6 +184,12 @@ class PostDraftRevisionServiceTest {
 
         provider.generate(sessionWithWorkingSetContext(), chunk(), ReviewStrategy.DEEP_EDIT);
 
+        assertTrue(capturedPrompt.get().contains("[Revision Target]"));
+        assertTrue(capturedPrompt.get().contains("[Revision Contract]"));
+        assertTrue(capturedPrompt.get().contains("[Output Contract]"));
+        assertTrue(capturedPrompt.get().contains("issues that must be fixed in this round"));
+        assertTrue(capturedPrompt.get().contains("boundary that must not be expanded"));
+        assertTrue(capturedPrompt.get().contains("formalTranslation must be the complete formal translation of the current chunk"));
         assertTrue(capturedPrompt.get().contains("[Working Set Context]"));
         assertTrue(capturedPrompt.get().contains("chunkId=chunk-2"));
         assertTrue(capturedPrompt.get().contains("sourceText=neighbor source"));
@@ -225,6 +231,16 @@ class PostDraftRevisionServiceTest {
                 new RevisionDraft("revised translation", RevisionMode.DEEP_EDIT, List.of("fix"), List.of())
         );
 
+        assertTrue(firstPrompt.get().contains("[Self-Check Objective]"));
+        assertTrue(firstPrompt.get().contains("[Self-Check Task]"));
+        assertTrue(firstPrompt.get().contains("[Self-Check Constraints]"));
+        assertTrue(firstPrompt.get().contains("[Output Contract]"));
+        assertTrue(firstPrompt.get().contains("current Revision Target"));
+        assertTrue(firstPrompt.get().contains("addresses previous findings one by one if previous findings exist"));
+        assertTrue(firstPrompt.get().contains("The fields must be:"));
+        assertTrue(firstPrompt.get().contains("- passed"));
+        assertTrue(firstPrompt.get().contains("- stopReason"));
+        assertTrue(firstPrompt.get().contains("- findings"));
         assertTrue(firstPrompt.get().contains("[Working Set Context]"));
         assertTrue(firstPrompt.get().contains("chunkId=chunk-2"));
         assertTrue(firstPrompt.get().contains("sourceText=neighbor source"));

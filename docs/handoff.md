@@ -341,3 +341,90 @@
    - TRACE: round start/finish, gate summary, detailed action/result blocks, repair blocks, proposal special path, containable-failure blocks
 5. COMPACT must not show round sub-blocks or repair/proposal sub-blocks by default.
 6. TRACE must not blindly duplicate the full legacy single-line event stream.
+## 2026-04-25 Review-Agent Prompt Refactor Implementation
+1. Prompt layering is now implemented in code:
+   - Layer A: ReviewAgentSystemPromptBuilder
+   - Layer B: InvestigationPromptBuilder
+   - Layer E: EvaluationPromptBuilder, RevisionPromptBuilder, RevisionSelfCheckPromptBuilder
+   - Layer C wording: OpenAiCompatibleReviewAgentStructuredGenerationClient
+   - Layer D wording: PromptBackedNextStepDecisionProvider
+2. ReviewAgentSystemPromptBuilder no longer expands a full [Available Tools] manual. It now keeps only global role, hard rules, authority rules, working discipline, completion/escalation rules, and output contract.
+3. InvestigationPromptBuilder now uses the fixed five-section Layer B layout and renders a short Decision Gate Summary with one active dimension template: continuity / term / quality / completion.
+4. Evaluation / revision / self-check now each use stage-local prompt contracts instead of repeating next-step routing rules.
+5. Revision Target is implemented as a prompt-local read-only rendered view from existing fields. No new persistence field, phase-state aggregate, or cross-service runtime contract was added.
+6. Investigation schema description now keeps only shape / allowed / required constraints plus minimal static semantics for record_confirmed_terms / request_human_review / complete_working_set / complete_project.
+7. Repair prompts now use one aligned wording frame: Repair Scope / Repair Findings / Repair Constraints / Repair Target Alignment.
+8. pending-empty / complete_project / B10 runtime semantics remain unchanged. When pending becomes empty with blocking backlog still open, runtime remains NO_PROGRESS rather than silently completing the project.
+## 2026-04-26 Review-Agent Runtime Observability And Failure Reconsume Design
+1. Current repeated `read_previous_chunks` / `read_next_chunks` success is not expected behavior.
+2. Root cause is narrow and local:
+   - adjacent read already expands from `boundaryWindow`
+   - but executor still treats zero-net-new adjacent reads as success
+   - and still increments `currentFocusRound`
+3. `workingSet.chunkIds()` currently uses anchor-first order, while `ReviewBoundaryWindow` and `ReviewWorkingSetContext` use canonical chunk order.
+4. This mismatch is the reason console `workingSet=` can look unordered even when boundary/context snapshots are ordered.
+5. Minimal fix direction is:
+   - reject zero-net-new adjacent reads with explicit local replan hint
+   - keep anchor as its own field
+   - render `workingSet.chunkIds()` in canonical chunk order
+6. Current transport retry semantics are already narrow and correct:
+   - true retry means `RetryingReviewAgentStructuredGenerationPort`
+   - retry visibility must include retry reason, exception type, and incremented attempt
+7. The larger observability gap is elsewhere:
+   - repair / proposal / local replan / containable-failure paths exist in runtime behavior
+   - but they are not exposed through `ReviewRuntimeVisualizer`
+8. Therefore current console confusion is mainly an observability gap, not a transport-retry semantics bug.
+9. The 2026-04-25 console visualization refactor plan is still the correct direction and remains within guardrails:
+   - presentation-only
+   - round / action / result / repair / containable-failure readability
+   - no new orchestrator
+10. Current containable failure behavior is only half-complete:
+   - containment is correct
+   - but failed chunks currently do not have a bounded tail-pass reconsume loop
+11. Minimal next design direction is:
+   - keep containable failure
+   - place failed chunks into a deferred tail-pass
+   - run deferred chunks after ordinary pending chunks are consumed
+   - keep bounded per-chunk retry limits
+   - do not generalize this into a new scheduler/orchestrator
+12. Prompt language policy should target only human-visible summary fields, not hidden reasoning:
+   - `reason`
+   - `strategyReason`
+   - `questionForHuman`
+   - repair / proposal / replan justifications
+13. These fields should default to the current translation target language; for the current project, Chinese should be preferred.
+
+## 2026-04-26 Unregistered Tool Prompt Hardening Direction
+1. Current `unregistered_tool` instability is judged primarily as a prompt-design failure, not an executor failure.
+2. Root cause is two-layered:
+   - next-step prompt does not expose the legal `toolName` set as an explicit exact-match whitelist
+   - `structured_output_repair` does not provide `unregistered_tool`-specific repair guidance
+3. Minimal compatible fix direction is locked to prompt hardening only:
+   - add a `[Registered Tool Names]` block near the output-contract area
+   - repeat a short exact-name reminder in investigation output reminders
+   - add `unregistered_tool`-specific repair guidance in both `structured_output_repair` and `decision_repair`
+4. This round should not expand into executor / validator redesign or broad protocol restructuring.
+5. Required regression coverage:
+   - system prompt contains explicit registered tool whitelist
+   - investigation prompt repeats exact-name constraint
+   - `unregistered_tool` repair prompt contains exact whitelist and forbidden alias examples
+   - repair can converge from alias names such as `read_adjacent_chunks` back to a registered tool
+6. Full design and implementation direction are documented at:
+   - `docs/superpowers/plans/2026-04-26-review-agent-unregistered-tool-prompt-hardening-design.md`
+
+## 2026-04-27 Unregistered Tool Hardening Adjustment
+1. The previous design direction has been narrowed further after review.
+2. Current root-cause framing is no longer "prompt-only". It is now treated as three-layer insufficiency:
+   - next-step prompt does not expose exact tool-name whitelist strongly enough
+   - schema / response-format does not express allowed `toolName` values precisely enough
+   - `structured_output_repair` does not provide enough actionable context for `unregistered_tool`
+3. The minimal compatible fix is now locked to three main items only:
+   - system prompt complete registered-tool whitelist near output contract
+   - schema / response-format exact-whitelist wording for `toolName`
+   - `structured_output_repair` unregistered-tool-specific repair guidance
+4. `previousInvalidToolName` is now a required part of the repair design, not an optional enhancement.
+5. `decision_repair` guidance for `unregistered_tool` is removed from this round's minimal scope.
+6. If investigation prompt retains any extra wording, it must stay as a single weak reminder only, not a second protocol-definition block.
+7. Whitelist text must be rendered from `ReviewToolRegistry` as a single source of truth across system prompt, schema description, and unregistered-tool repair prompt.
+8. Full updated design is documented at:
+   - `docs/superpowers/plans/2026-04-26-review-agent-unregistered-tool-prompt-hardening-design.md`

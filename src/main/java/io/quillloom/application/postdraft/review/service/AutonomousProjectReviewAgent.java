@@ -4,6 +4,7 @@ import io.quillloom.application.postdraft.review.model.PostDraftReviewSession;
 import io.quillloom.application.postdraft.review.model.ProjectReviewRuntimeSession;
 import io.quillloom.application.postdraft.review.model.ProjectReviewStatus;
 import io.quillloom.application.postdraft.review.model.ReviewAgentConfig;
+import io.quillloom.application.postdraft.review.model.ReviewProjectStopReason;
 import io.quillloom.application.postdraft.review.model.ReviewToolDecision;
 import io.quillloom.application.postdraft.review.model.ReviewToolExecutionResult;
 import io.quillloom.application.postdraft.review.port.out.LlmStructuredOutputException;
@@ -11,11 +12,15 @@ import io.quillloom.application.postdraft.review.port.out.PostDraftReviewAgentRe
 import io.quillloom.domain.postdraft.PostDraftChunkRecord;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.LongSupplier;
 
 public class AutonomousProjectReviewAgent {
+
+    private static final int MAX_DEFERRED_TAIL_REPLAYS_PER_CHUNK = 1;
 
     private final PostDraftReviewAgentReader reader;
     private final PostDraftReviewSessionFactory sessionFactory;
@@ -131,6 +136,7 @@ public class AutonomousProjectReviewAgent {
                                            String operatorNote) {
         Objects.requireNonNull(runtime, "runtime");
         ProjectReviewRuntimeSession current = runtime;
+        DeferredTailState deferredTailState = DeferredTailState.empty();
         String normalizedOperatorNote = operatorNote == null ? "" : operatorNote.trim();
         long startedAtNanos = nanoTimeSource.getAsLong();
         runtimeVisualizer.projectStarted(current);
@@ -160,6 +166,13 @@ public class AutonomousProjectReviewAgent {
                         return completedRuntime;
                     }
                     if (current.pendingChunkIds().isEmpty()) {
+                        if (deferredTailState.canActivateTailPass()) {
+                            ProjectReviewRuntimeSession previous = current;
+                            current = activateDeferredTailPass(current, List.copyOf(deferredTailState.queuedChunkIds()));
+                            deferredTailState = deferredTailState.activateTailPass();
+                            persistenceHook.afterTransition(previous, current);
+                            continue;
+                        }
                         ProjectReviewRuntimeSession failedRuntime = current.failNoProgress(
                                 "pendingChunkCount=0 but blocking backlog remains"
                         );
@@ -177,18 +190,24 @@ public class AutonomousProjectReviewAgent {
             }
 
             PostDraftReviewSession focusSession = current.currentFocusSession().orElseThrow();
+            runtimeVisualizer.focusRoundStarted(current);
             ReviewToolDecision decision;
             try {
-                decision = nextStepDecisionProvider.decide(focusSession);
+                decision = nextStepDecisionProvider.decide(current, focusSession);
             } catch (ReviewAgentNextStepStructuredOutputException
                      | RecordConfirmedTermsProposalException
                      | RecordConfirmedTermsAssemblyException ex) {
                 ProjectReviewRuntimeSession previous = current;
+                String failedChunkId = current.currentFocusChunkId().orElseThrow();
                 current = current.deferCurrentFocusFailure(
                         structuredFailureCode(ex),
                         summarizeContainableFailure(ex),
                         summarizeContainableIssue(current, ex)
                 );
+                deferredTailState = deferredTailState.recordFailure(failedChunkId);
+                runtimeVisualizer.repairTriggered(previous, repairKind(ex), summarizeContainableFailure(ex));
+                runtimeVisualizer.containableFailureCaptured(previous, structuredFailureCode(ex), summarizeContainableFailure(ex));
+                runtimeVisualizer.focusRoundFinished(current);
                 persistenceHook.afterTransition(previous, current);
                 continue;
             } catch (LlmStructuredOutputException ex) {
@@ -204,6 +223,7 @@ public class AutonomousProjectReviewAgent {
                 runtimeVisualizer.projectFinished(current);
                 return current;
             }
+            runtimeVisualizer.decisionProduced(current, decision);
             runtimeVisualizer.toolCalled(current, decision);
             ReviewToolExecutionResult execution;
             try {
@@ -221,6 +241,10 @@ public class AutonomousProjectReviewAgent {
             runtimeVisualizer.toolCompleted(current, execution);
             ProjectReviewRuntimeSession previous = current;
             current = execution.nextRuntime();
+            if (!execution.success()) {
+                runtimeVisualizer.toolRejected(current, execution.rejection().rejectionReason());
+            }
+            runtimeVisualizer.focusRoundFinished(current);
             persistenceHook.afterTransition(previous, current);
             if (current.canAutoCompletePendingEmptyProject()) {
                 ProjectReviewRuntimeSession completedRuntime = current.completeProject();
@@ -231,6 +255,13 @@ public class AutonomousProjectReviewAgent {
             if (current.status() == ProjectReviewStatus.ACTIVE
                     && current.pendingChunkIds().isEmpty()
                     && !current.issueBacklog().openIssues().isEmpty()) {
+                if (deferredTailState.canActivateTailPass()) {
+                    ProjectReviewRuntimeSession replayPrevious = current;
+                    current = activateDeferredTailPass(current, List.copyOf(deferredTailState.queuedChunkIds()));
+                    deferredTailState = deferredTailState.activateTailPass();
+                    persistenceHook.afterTransition(replayPrevious, current);
+                    continue;
+                }
                 ProjectReviewRuntimeSession failedRuntime = current.failNoProgress(
                         "pendingChunkCount=0 but blocking backlog remains"
                 );
@@ -252,6 +283,40 @@ public class AutonomousProjectReviewAgent {
         String normalizedNote = humanReviewNote == null ? "" : humanReviewNote.trim();
         ProjectReviewRuntimeSession resumed = runtime.resumeFromHumanReview(normalizedNote);
         return run(resumed, "");
+    }
+
+    private ProjectReviewRuntimeSession activateDeferredTailPass(ProjectReviewRuntimeSession runtime,
+                                                                 List<String> deferredChunkIds) {
+        List<String> replayChunkIds = deferredChunkIds == null ? List.of() : List.copyOf(deferredChunkIds);
+        ProjectReviewRuntimeSession replayRuntime = new ProjectReviewRuntimeSession(
+                runtime.projectId(),
+                replayChunkIds,
+                runtime.completedChunkOutcomes(),
+                java.util.Optional.empty(),
+                java.util.Optional.empty(),
+                runtime.transcriptStore(),
+                runtime.historyLog(),
+                runtime.processTrail(),
+                java.util.Optional.empty(),
+                ProjectReviewStatus.ACTIVE,
+                ReviewProjectStopReason.NONE,
+                withoutBacklogChunks(runtime, replayChunkIds),
+                0
+        ).appendProcess("endgameReconsume=" + String.join(",", replayChunkIds));
+        return replayRuntime.enterSelectingFocus();
+    }
+
+    private io.quillloom.application.postdraft.review.model.ProjectIssueBacklog withoutBacklogChunks(ProjectReviewRuntimeSession runtime,
+                                                                                                      List<String> chunkIds) {
+        if (chunkIds == null || chunkIds.isEmpty()) {
+            return runtime.issueBacklog();
+        }
+        LinkedHashSet<String> blockedChunkIds = new LinkedHashSet<>(chunkIds);
+        List<io.quillloom.application.postdraft.review.model.DeferredReviewIssue> remainingIssues =
+                runtime.issueBacklog().openIssues().stream()
+                        .filter(issue -> !blockedChunkIds.contains(issue.relatedChunkId()))
+                        .toList();
+        return new io.quillloom.application.postdraft.review.model.ProjectIssueBacklog(remainingIssues);
     }
 
     private ProjectReviewRuntimeSession compactFocusTranscriptIfNeeded(ProjectReviewRuntimeSession runtime) {
@@ -366,6 +431,19 @@ public class AutonomousProjectReviewAgent {
         return "LLM_STRUCTURED_OUTPUT_FAILED";
     }
 
+    private String repairKind(LlmStructuredOutputException exception) {
+        if (exception instanceof ReviewAgentNextStepStructuredOutputException) {
+            return "structured_output_repair";
+        }
+        if (exception instanceof RecordConfirmedTermsProposalException) {
+            return "proposal_repair";
+        }
+        if (exception instanceof RecordConfirmedTermsAssemblyException) {
+            return "proposal_assembly_repair";
+        }
+        return "structured_output_repair";
+    }
+
     private String extractRawOutput(String message) {
         if (message == null || message.isBlank()) {
             return "(none)";
@@ -388,6 +466,39 @@ public class AutonomousProjectReviewAgent {
     private boolean isLlmBackedExecution(String toolName) {
         return "evaluate_focus".equals(toolName)
                 || "draft_revision".equals(toolName);
+    }
+
+    private record DeferredTailState(
+            LinkedHashMap<String, Integer> replayCounts,
+            LinkedHashSet<String> queuedChunkIds,
+            boolean tailPassActivated
+    ) {
+
+        private static DeferredTailState empty() {
+            return new DeferredTailState(new LinkedHashMap<>(), new LinkedHashSet<>(), false);
+        }
+
+        private DeferredTailState recordFailure(String chunkId) {
+            LinkedHashMap<String, Integer> nextReplayCounts = new LinkedHashMap<>(replayCounts);
+            nextReplayCounts.putIfAbsent(chunkId, 0);
+            LinkedHashSet<String> nextQueued = new LinkedHashSet<>(queuedChunkIds);
+            if (!tailPassActivated && nextReplayCounts.getOrDefault(chunkId, 0) < MAX_DEFERRED_TAIL_REPLAYS_PER_CHUNK) {
+                nextQueued.add(chunkId);
+            }
+            return new DeferredTailState(nextReplayCounts, nextQueued, tailPassActivated);
+        }
+
+        private boolean canActivateTailPass() {
+            return !tailPassActivated && !queuedChunkIds.isEmpty();
+        }
+
+        private DeferredTailState activateTailPass() {
+            LinkedHashMap<String, Integer> nextReplayCounts = new LinkedHashMap<>(replayCounts);
+            for (String chunkId : queuedChunkIds) {
+                nextReplayCounts.merge(chunkId, 1, Integer::sum);
+            }
+            return new DeferredTailState(nextReplayCounts, new LinkedHashSet<>(), true);
+        }
     }
 }
 

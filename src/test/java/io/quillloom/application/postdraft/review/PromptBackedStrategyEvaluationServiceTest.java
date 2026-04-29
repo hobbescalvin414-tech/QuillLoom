@@ -68,11 +68,19 @@ class PromptBackedStrategyEvaluationServiceTest {
 
         service.evaluate(sampleSession(), sampleChunk());
 
-        assertTrue(capturedSystemPrompt.get().contains("You are a post-draft translation review agent"));
-        assertTrue(capturedSystemPrompt.get().contains("working-set text context"));
-        assertFalse(containsMojibake(capturedSystemPrompt.get()));
+        assertTrue(capturedUserPrompt.get().contains("[Evaluation Inputs]"));
+        assertTrue(capturedUserPrompt.get().contains("[Evaluation Handoff]"));
+        assertTrue(capturedUserPrompt.get().contains("[Evaluation Task]"));
+        assertTrue(capturedUserPrompt.get().contains("[Evaluation Constraints]"));
+        assertTrue(capturedUserPrompt.get().contains("[Output Contract]"));
+        assertTrue(capturedUserPrompt.get().contains("Key Evidence"));
+        assertTrue(capturedUserPrompt.get().contains("Conflicting Evidence"));
+        assertTrue(capturedUserPrompt.get().contains("Evidence Gaps"));
+        assertTrue(capturedUserPrompt.get().contains("recommendedStrategy must use an exact value from the given candidate strategies"));
+        assertTrue(capturedUserPrompt.get().contains("evidenceSufficiency must be one of: UNKNOWN / SUFFICIENT / PARTIAL / INSUFFICIENT"));
         assertTrue(capturedUserPrompt.get().contains("[Working Set Text Context]"));
         assertTrue(capturedUserPrompt.get().contains("chunkId=chunk-2"));
+        assertFalse(containsMojibake(capturedUserPrompt.get()));
     }
 
     private static boolean containsMojibake(String text) {

@@ -10,8 +10,23 @@ import java.util.Set;
 public class ReviewToolDecisionContractValidator {
 
     public Optional<String> validate(ReviewToolDecision decision, ReviewToolRegistry toolRegistry) {
+        return validate(decision, toolRegistry, ValidationMode.EXECUTABLE);
+    }
+
+    public Optional<String> validateNextStepDecision(ReviewToolDecision decision, ReviewToolRegistry toolRegistry) {
+        return validate(decision, toolRegistry, ValidationMode.NEXT_STEP);
+    }
+
+    public Optional<String> validateExecutableDecision(ReviewToolDecision decision, ReviewToolRegistry toolRegistry) {
+        return validate(decision, toolRegistry, ValidationMode.EXECUTABLE);
+    }
+
+    private Optional<String> validate(ReviewToolDecision decision,
+                                      ReviewToolRegistry toolRegistry,
+                                      ValidationMode mode) {
         Objects.requireNonNull(decision, "decision");
         Objects.requireNonNull(toolRegistry, "toolRegistry");
+        Objects.requireNonNull(mode, "mode");
 
         if (!toolRegistry.contains(decision.toolName())) {
             return Optional.of("unregistered_tool");
@@ -23,6 +38,10 @@ public class ReviewToolDecisionContractValidator {
             if (!allowedArguments.contains(argumentName)) {
                 return Optional.of("unexpected_argument:" + argumentName);
             }
+        }
+
+        if (mode == ValidationMode.NEXT_STEP && "record_confirmed_terms".equals(decision.toolName())) {
+            return validateReasonOnly(decision);
         }
 
         for (String requiredArgument : definition.requiredArguments()) {
@@ -41,11 +60,19 @@ public class ReviewToolDecisionContractValidator {
             }
         }
 
+        return validateReasonOnly(decision);
+    }
+
+    private Optional<String> validateReasonOnly(ReviewToolDecision decision) {
         if ("request_human_review".equals(decision.toolName())
                 && (decision.reason() == null || decision.reason().isBlank())) {
             return Optional.of("invalid_reason");
         }
-
         return Optional.empty();
+    }
+
+    private enum ValidationMode {
+        NEXT_STEP,
+        EXECUTABLE
     }
 }

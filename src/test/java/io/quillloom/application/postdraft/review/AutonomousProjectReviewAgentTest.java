@@ -1,5 +1,7 @@
 package io.quillloom.application.postdraft.review;
 
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.quillloom.application.postdraft.review.model.HumanReviewRequest;
 import io.quillloom.application.postdraft.review.model.PostDraftReviewSession;
 import io.quillloom.application.postdraft.review.model.ProjectChunkReviewOutcome;
@@ -11,6 +13,7 @@ import io.quillloom.application.postdraft.review.model.ReviewAgentState;
 import io.quillloom.application.postdraft.review.model.ReviewFocus;
 import io.quillloom.application.postdraft.review.model.RecordConfirmedTermEntry;
 import io.quillloom.application.postdraft.review.model.RecordConfirmedTermsProposal;
+import io.quillloom.application.postdraft.review.model.StoredReviewSession;
 import io.quillloom.application.postdraft.review.model.ReviewStrategy;
 import io.quillloom.application.postdraft.review.model.ReviewToolDecision;
 import io.quillloom.application.postdraft.review.model.RevisionDraft;
@@ -32,6 +35,8 @@ import io.quillloom.application.postdraft.review.service.PostDraftRevisionServic
 import io.quillloom.application.postdraft.review.service.PromptBackedNextStepDecisionProvider;
 import io.quillloom.application.postdraft.review.service.PromptBackedRevisionDraftProvider;
 import io.quillloom.application.postdraft.review.service.PromptBackedStrategyEvaluationService;
+import io.quillloom.application.postdraft.review.service.ProjectReviewRuntimePersistenceHook;
+import io.quillloom.application.postdraft.review.service.ReviewAgentNextStepStructuredOutputException;
 import io.quillloom.application.postdraft.review.service.ReviewToolExecutor;
 import io.quillloom.application.postdraft.review.service.ReviewToolGuardrail;
 import io.quillloom.application.postdraft.review.service.ReviewToolRegistry;
@@ -51,11 +56,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AutonomousProjectReviewAgentTest {
@@ -387,6 +394,26 @@ class AutonomousProjectReviewAgentTest {
     }
 
     @Test
+    void shouldInjectRuntimeFactsIntoNextStepPromptFromRealAgentLoop() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", "translated-1")));
+        SequenceGenerationPort generationPort = new SequenceGenerationPort(
+                new ReviewToolDecision("request_human_review", Map.of(), "stop")
+        );
+        AutonomousProjectReviewAgent agent = buildAgent(reader, generationPort);
+
+        agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of())
+                        .withSelectedFocus("chunk-1"),
+                "operator note"
+        );
+
+        String prompt = generationPort.latestPrompt();
+        assertTrue(prompt.contains("pendingChunkCount=0"));
+        assertTrue(prompt.contains("completedChunkCount=0"));
+        assertTrue(prompt.contains("currentFocusChunkStillPending=false"));
+    }
+
+    @Test
     void shouldNotCompactWorkingSetContextWhenTranscriptAndEvidenceAreCompacted() throws Exception {
         InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", 1, "translated-1")));
         SequenceGenerationPort generationPort = new SequenceGenerationPort(
@@ -566,7 +593,7 @@ class AutonomousProjectReviewAgentTest {
                 List.of(
                         new LlmStructuredOutputException("next step malformed; rawOutput={\"toolName\":\"record_confirmed_terms\"}"),
                         new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-2")), "done"),
-                        new ReviewToolDecision("complete_project", Map.of(), "finish")
+                        new LlmStructuredOutputException("next step malformed; rawOutput={\"toolName\":\"record_confirmed_terms\"}")
                 ),
                 List.of()
         );
@@ -603,8 +630,8 @@ class AutonomousProjectReviewAgentTest {
                 "operator note"
         );
 
-        assertEquals(ReviewAgentState.COMPLETED, result.state());
-        assertEquals(ReviewProjectStopReason.PROJECT_COMPLETED, result.stopReason());
+        assertEquals(ReviewAgentState.FAILED, result.state());
+        assertEquals(ReviewProjectStopReason.NO_PROGRESS, result.stopReason());
         assertEquals(List.of("chunk-2"), result.completedChunkOutcomes().stream().map(ProjectChunkReviewOutcome::chunkId).toList());
         assertTrue(result.issueBacklog().openIssues().stream()
                 .anyMatch(issue -> issue.relatedChunkId().equals("chunk-1")
@@ -613,6 +640,152 @@ class AutonomousProjectReviewAgentTest {
         assertTrue(result.processTrail().stream()
                 .anyMatch(entry -> entry.contains("focusFailed=chunk-1")
                         && entry.contains("failureCode=NEXT_STEP_STRUCTURED_OUTPUT_FAILED")));
+    }
+
+    @Test
+    void shouldReplayDeferredFailedChunkAfterNormalPendingQueueClears() {
+        InMemoryReader reader = new InMemoryReader(List.of(
+                chunk("chunk-1", "translated-1"),
+                chunk("chunk-2", "translated-2")
+        ));
+        AtomicInteger chunk1Attempts = new AtomicInteger();
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                new MixedGenerationPort(List.of(), List.of())
+        ) {
+            @Override
+            public ReviewToolDecision decide(PostDraftReviewSession session) {
+                if ("chunk-1".equals(session.focus().chunkId())) {
+                    if (chunk1Attempts.getAndIncrement() == 0) {
+                        throw new ReviewAgentNextStepStructuredOutputException(
+                                "next step malformed on chunk-1; rawOutput=bad-tail",
+                                new LlmStructuredOutputException("raw")
+                        );
+                    }
+                    return new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-1")), "retry deferred chunk");
+                }
+                if ("chunk-2".equals(session.focus().chunkId())) {
+                    return new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-2")), "finish normal pending chunk");
+                }
+                return new ReviewToolDecision("complete_project", Map.of(), "finish project");
+            }
+        };
+
+        AutonomousProjectReviewAgent agent = buildAgent(reader, provider, ProjectReviewRuntimePersistenceHook.noop());
+        ProjectReviewRuntimeSession result = agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1", "chunk-2")),
+                "operator note"
+        );
+
+        assertEquals(ReviewAgentState.COMPLETED, result.state());
+        assertEquals(ReviewProjectStopReason.PROJECT_COMPLETED, result.stopReason());
+        assertEquals(List.of("chunk-2", "chunk-1"), result.completedChunkOutcomes().stream().map(ProjectChunkReviewOutcome::chunkId).toList());
+        assertTrue(result.processTrail().stream()
+                .anyMatch(entry -> entry.contains("endgameReconsume=chunk-1")));
+    }
+
+    @Test
+    void shouldStopWithoutCompleteProjectWhenDeferredTailReplayBudgetIsExhausted() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", "translated-1")));
+        AtomicInteger chunk1Attempts = new AtomicInteger();
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                new MixedGenerationPort(List.of(), List.of())
+        ) {
+            @Override
+            public ReviewToolDecision decide(PostDraftReviewSession session) {
+                if ("chunk-1".equals(session.focus().chunkId())) {
+                    chunk1Attempts.incrementAndGet();
+                    throw new ReviewAgentNextStepStructuredOutputException(
+                            "next step malformed on chunk-1; rawOutput=bad-tail",
+                            new LlmStructuredOutputException("raw")
+                    );
+                }
+                return new ReviewToolDecision("complete_project", Map.of(), "should stay blocked");
+            }
+        };
+
+        AutonomousProjectReviewAgent agent = buildAgent(reader, provider, ProjectReviewRuntimePersistenceHook.noop());
+        ProjectReviewRuntimeSession result = agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1")),
+                "operator note"
+        );
+
+        assertEquals(2, chunk1Attempts.get());
+        assertEquals(ReviewAgentState.FAILED, result.state());
+        assertEquals(ReviewProjectStopReason.NO_PROGRESS, result.stopReason());
+        assertFalse(result.issueBacklog().openIssues().isEmpty());
+        assertTrue(result.issueBacklog().openIssues().stream()
+                .anyMatch(issue -> issue.relatedChunkId().equals("chunk-1")));
+    }
+
+    @Test
+    void shouldKeepDeferredTailStateOutOfStoredRuntimePayload() throws Exception {
+        InMemoryReader reader = new InMemoryReader(List.of(
+                chunk("chunk-1", "translated-1"),
+                chunk("chunk-2", "translated-2")
+        ));
+        RecordingPersistenceHook persistenceHook = new RecordingPersistenceHook();
+        AtomicInteger chunk1Attempts = new AtomicInteger();
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                new MixedGenerationPort(List.of(), List.of())
+        ) {
+            @Override
+            public ReviewToolDecision decide(PostDraftReviewSession session) {
+                if ("chunk-1".equals(session.focus().chunkId())) {
+                    if (chunk1Attempts.getAndIncrement() == 0) {
+                        throw new ReviewAgentNextStepStructuredOutputException(
+                                "next step malformed on chunk-1; rawOutput=bad-tail",
+                                new LlmStructuredOutputException("raw")
+                        );
+                    }
+                    return new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-1")), "retry deferred chunk");
+                }
+                if ("chunk-2".equals(session.focus().chunkId())) {
+                    return new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-2")), "finish normal pending chunk");
+                }
+                return new ReviewToolDecision("complete_project", Map.of(), "finish project");
+            }
+        };
+
+        AutonomousProjectReviewAgent agent = buildAgent(reader, provider, persistenceHook);
+        ProjectReviewRuntimeSession result = agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1", "chunk-2")),
+                "operator note"
+        );
+
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules().disable(MapperFeature.AUTO_DETECT_IS_GETTERS);
+        String storedJson = mapper.writeValueAsString(StoredReviewSession.from(result));
+
+        assertFalse(storedJson.contains("deferredTail"));
+        assertFalse(storedJson.contains("deferredPending"));
+        assertFalse(storedJson.contains("tailReplay"));
+        assertTrue(persistenceHook.savedJson().stream().noneMatch(json ->
+                json.contains("deferredTail") || json.contains("deferredPending") || json.contains("tailReplay")));
+    }
+
+    @Test
+    void shouldRequireWaitingHumanRuntimeForResumeBoundary() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", "translated-1")));
+        AutonomousProjectReviewAgent agent = buildAgent(
+                reader,
+                new SequenceGenerationPort(new ReviewToolDecision("complete_project", Map.of(), "finish"))
+        );
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> agent.resume(
+                        ProjectReviewRuntimeSession.initialize("project-1", List.of())
+                                .withSelectedFocus("chunk-1"),
+                        "resume note"
+                )
+        );
+
+        assertTrue(error.getMessage().contains("resume requires WAITING_HUMAN status"));
     }
 
     @Test
@@ -625,9 +798,15 @@ class AutonomousProjectReviewAgentTest {
                 List.of(
                         new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Le Bouquet", "placeholder")), "record confirmed term"),
                         new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-2")), "done"),
-                        new ReviewToolDecision("complete_project", Map.of(), "finish")
+                        new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Le Bouquet", "placeholder")), "record confirmed term")
                 ),
                 List.of(
+                        new LlmStructuredOutputException("proposal rawOutput=bad-1"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-2"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-3"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-4"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-5"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-6"),
                         new LlmStructuredOutputException("proposal rawOutput=bad-1"),
                         new LlmStructuredOutputException("proposal rawOutput=bad-2"),
                         new LlmStructuredOutputException("proposal rawOutput=bad-3"),
@@ -669,8 +848,8 @@ class AutonomousProjectReviewAgentTest {
                 "operator note"
         );
 
-        assertEquals(ReviewAgentState.COMPLETED, result.state());
-        assertEquals(ReviewProjectStopReason.PROJECT_COMPLETED, result.stopReason());
+        assertEquals(ReviewAgentState.FAILED, result.state());
+        assertEquals(ReviewProjectStopReason.NO_PROGRESS, result.stopReason());
         assertTrue(result.issueBacklog().openIssues().stream()
                 .anyMatch(issue -> issue.relatedChunkId().equals("chunk-1")
                         && issue.summary().contains("failureCode=RECORD_CONFIRMED_TERMS_PROPOSAL_FAILED")
@@ -721,9 +900,15 @@ class AutonomousProjectReviewAgentTest {
                 List.of(
                         new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed term"),
                         new ReviewToolDecision("complete_working_set", Map.of("chunkIds", List.of("chunk-2")), "done"),
-                        new ReviewToolDecision("complete_project", Map.of(), "finish")
+                        new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed term")
                 ),
                 List.of(
+                        new LlmStructuredOutputException("proposal rawOutput=bad-1"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-2"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-3"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-4"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-5"),
+                        new LlmStructuredOutputException("proposal rawOutput=bad-6"),
                         new LlmStructuredOutputException("proposal rawOutput=bad-1"),
                         new LlmStructuredOutputException("proposal rawOutput=bad-2"),
                         new LlmStructuredOutputException("proposal rawOutput=bad-3"),
@@ -739,8 +924,8 @@ class AutonomousProjectReviewAgentTest {
                 "operator note"
         );
 
-        assertEquals(ReviewAgentState.COMPLETED, result.state());
-        assertNotEquals(ReviewProjectStopReason.LLM_CALL_FAILED, result.stopReason());
+        assertEquals(ReviewAgentState.FAILED, result.state());
+        assertEquals(ReviewProjectStopReason.NO_PROGRESS, result.stopReason());
         assertTrue(result.processTrail().stream().anyMatch(entry -> entry.contains("focusFailed=chunk-1")));
         assertTrue(result.processTrail().stream()
                 .anyMatch(entry -> entry.contains("focusFailed=chunk-1")
@@ -917,9 +1102,16 @@ class AutonomousProjectReviewAgentTest {
         assertTrue(result.processTrail().stream().anyMatch(entry -> entry.contains("llmCallFailed=GOAWAY received during self-check")));
     }
 
-    private static AutonomousProjectReviewAgent buildAgent(PostDraftReviewAgentReader reader,
-                                                           ReviewAgentStructuredGenerationPort generationPort) {
-        return new AutonomousProjectReviewAgent(
+    @Test
+    void shouldReportToolRejectedInsteadOfLocalReplanForExecutorRejection() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunk("chunk-1", "translated-1")));
+        SequenceGenerationPort generationPort = new SequenceGenerationPort(
+                new ReviewToolDecision("read_next_chunks", Map.of("count", 1), "read once"),
+                new ReviewToolDecision("read_next_chunks", Map.of("count", 1), "repeat rejected read"),
+                new ReviewToolDecision("request_human_review", Map.of(), "stop")
+        );
+        RecordingVisualizer visualizer = new RecordingVisualizer();
+        AutonomousProjectReviewAgent agent = new AutonomousProjectReviewAgent(
                 reader,
                 new PostDraftReviewSessionFactory(),
                 new PostDraftReviewProblemClassifier(),
@@ -943,7 +1135,57 @@ class AutonomousProjectReviewAgentTest {
                         new PostDraftReviewProcessSummaryAssembler(),
                         new FocusHumanStopPolicy(1, 1)
                 ),
-                ReviewRuntimeVisualizer.noop()
+                visualizer
+        );
+
+        agent.run(
+                ProjectReviewRuntimeSession.initialize("project-1", List.of("chunk-1")),
+                "operator note"
+        );
+
+        assertTrue(visualizer.rejectedDetails.stream().anyMatch(detail -> detail.contains("redundant_adjacent_read")));
+        assertTrue(visualizer.localReplanDetails.isEmpty());
+    }
+
+    private static AutonomousProjectReviewAgent buildAgent(PostDraftReviewAgentReader reader,
+                                                           ReviewAgentStructuredGenerationPort generationPort) {
+        return buildAgent(
+                reader,
+                new PromptBackedNextStepDecisionProvider(
+                        new InvestigationPromptBuilder(),
+                        ReviewToolRegistry.defaultRegistry(),
+                        generationPort
+                ),
+                ProjectReviewRuntimePersistenceHook.noop()
+        );
+    }
+
+    private static AutonomousProjectReviewAgent buildAgent(PostDraftReviewAgentReader reader,
+                                                           PromptBackedNextStepDecisionProvider provider,
+                                                           ProjectReviewRuntimePersistenceHook persistenceHook) {
+        return new AutonomousProjectReviewAgent(
+                reader,
+                new PostDraftReviewSessionFactory(),
+                new PostDraftReviewProblemClassifier(),
+                new SequenceProjectFocusSelector(),
+                provider,
+                new ReviewToolExecutor(
+                        ReviewToolRegistry.defaultRegistry(),
+                        new ReviewToolGuardrail(),
+                        reader,
+                        PostDraftReviewAgentTermWriter.noop(),
+                        new PromptBackedStrategyEvaluationService(new EvaluationPromptBuilder(), new MixedGenerationPort(List.of(), List.of())),
+                        new PostDraftRevisionService(
+                                new PromptBackedRevisionDraftProvider(),
+                                (session, chunk, strategy, draft) -> new RevisionSelfCheckResult(true, "", List.of())
+                        ),
+                        new WorkingSetCompletionHandler(reader, new PostDraftReviewProcessSummaryAssembler()),
+                        new PostDraftReviewProcessSummaryAssembler(),
+                        new FocusHumanStopPolicy(1, 1)
+                ),
+                ReviewRuntimeVisualizer.noop(),
+                persistenceHook,
+                io.quillloom.application.postdraft.review.model.ReviewAgentConfig.defaultConfig()
         );
     }
 
@@ -1171,6 +1413,39 @@ class AutonomousProjectReviewAgentTest {
                 }
             }
             throw new IllegalArgumentException("Unknown chunkId: " + chunkId);
+        }
+    }
+
+    private static final class RecordingPersistenceHook implements ProjectReviewRuntimePersistenceHook {
+        private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules().disable(MapperFeature.AUTO_DETECT_IS_GETTERS);
+        private final java.util.ArrayList<String> savedJson = new java.util.ArrayList<>();
+
+        @Override
+        public void afterTransition(ProjectReviewRuntimeSession previousRuntime, ProjectReviewRuntimeSession currentRuntime) {
+            try {
+                savedJson.add(mapper.writeValueAsString(StoredReviewSession.from(currentRuntime)));
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        }
+
+        private List<String> savedJson() {
+            return List.copyOf(savedJson);
+        }
+    }
+
+    private static final class RecordingVisualizer implements ReviewRuntimeVisualizer {
+        private final java.util.ArrayList<String> rejectedDetails = new java.util.ArrayList<>();
+        private final java.util.ArrayList<String> localReplanDetails = new java.util.ArrayList<>();
+
+        @Override
+        public void toolRejected(ProjectReviewRuntimeSession runtime, String detail) {
+            rejectedDetails.add(detail);
+        }
+
+        @Override
+        public void localReplanTriggered(ProjectReviewRuntimeSession runtime, String detail) {
+            localReplanDetails.add(detail);
         }
     }
 }

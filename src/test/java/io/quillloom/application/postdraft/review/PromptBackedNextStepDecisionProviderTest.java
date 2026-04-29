@@ -212,12 +212,10 @@ class PromptBackedNextStepDecisionProviderTest {
     }
 
     @Test
-    void shouldRetryStructuredOutputEntriesFailureWithExecutableEntriesRepairGuidance() {
+    void shouldUseRefactorRepairSectionsInDecisionRepairPrompt() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
-                new LlmStructuredOutputException(
-                        "Review agent invalid structured tool decision: invalid_argument:entries; rawOutput={\"toolName\":\"record_confirmed_terms\",\"arguments\":{\"entries\":{}},\"reason\":\"record term\"}"
-                ),
-                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Bernolle", "Bernolle-fixed")), "fixed")
+                new ReviewToolDecision("read_previous_chunks", Map.of(), "need context"),
+                new ReviewToolDecision("read_previous_chunks", Map.of("count", 1), "fixed")
         );
         PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
                 new InvestigationPromptBuilder(),
@@ -227,26 +225,44 @@ class PromptBackedNextStepDecisionProviderTest {
                 new ReviewToolDecisionContractValidator()
         );
 
-        ReviewToolDecision decision = provider.decide(sampleSession());
+        provider.decide(sampleSession());
+
+        String repairPrompt = generationPort.prompts().get(1);
+        assertTrue(repairPrompt.contains("[Repair Scope]"));
+        assertTrue(repairPrompt.contains("[Repair Findings]"));
+        assertTrue(repairPrompt.contains("[Repair Constraints]"));
+        assertTrue(repairPrompt.contains("[Repair Target Alignment]"));
+        assertFalse(repairPrompt.contains("[Decision Repair]"));
+    }
+
+    @Test
+    void shouldAllowRouteStageEntriesFailureToProceedIntoProposalPath() {
+        RecordingGenerationPort generationPort = new RecordingGenerationPort(
+                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of()), "record term"),
+                new RecordConfirmedTermsProposal(
+                        RecordConfirmedTermsProposal.Action.RECORD_CONFIRMED_TERMS,
+                        "stable pair",
+                        List.of(new RecordConfirmedTermEntry("Bernolle", "Bernolle-fixed"))
+                )
+        );
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                new ReviewAgentSystemPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                generationPort,
+                new ReviewToolDecisionContractValidator()
+        );
+
+        ReviewToolDecision decision = provider.decide(sampleSessionWithEvidence(
+                List.of("confirmedTerm=Bernolle->Bernolle-fixed"),
+                List.of(),
+                List.of()
+        ));
 
         assertEquals("record_confirmed_terms", decision.toolName());
         assertEquals(Map.of("Bernolle", "Bernolle-fixed"), decision.arguments().get("entries"));
-        assertEquals(2, generationPort.prompts().size());
-        String repairPrompt = generationPort.prompts().get(1);
-        assertTrue(repairPrompt.contains("invalid_argument:entries"));
-        assertTrue(repairPrompt.contains("arguments.entries"));
-        assertTrue(repairPrompt.contains("Option A"));
-        assertTrue(repairPrompt.contains("Option B"));
-        assertTrue(repairPrompt.contains("\"entries\": {}"));
-        assertTrue(repairPrompt.contains("{\"entries\":{\"sourceTerm\":\"...\",\"targetTerm\":\"...\"}}"));
-        assertTrue(repairPrompt.contains("{\"entries\":[{\"sourceTerm\":\"...\",\"targetTerm\":\"...\"}]}"));
-        assertTrue(repairPrompt.contains("{\"entries\":[\"A=B\"]}"));
-        assertTrue(repairPrompt.contains("{\"entries\":{\"<source-term>\":\"<target-term>\"}}"));
-        assertTrue(repairPrompt.contains("Forbidden third output"));
-        assertTrue(repairPrompt.contains("tool/arguments are still invalid"));
-        assertTrue(repairPrompt.contains("union/schema/argument-conflict analysis in reason"));
-        assertTrue(repairPrompt.contains("extra explanatory text outside JSON"));
-        assertNoMojibake(repairPrompt);
+        assertEquals(1, generationPort.prompts().size());
+        assertEquals(1, generationPort.proposalPrompts().size());
     }
 
     @Test
@@ -301,7 +317,7 @@ class PromptBackedNextStepDecisionProviderTest {
     @Test
     void shouldEnterProposalPathOnlyAfterStandardDecisionChoosesRecordConfirmedTerms() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
-                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed term"),
+                new ReviewToolDecision("record_confirmed_terms", Map.of(), "record confirmed term"),
                 new RecordConfirmedTermsProposal(
                         RecordConfirmedTermsProposal.Action.RECORD_CONFIRMED_TERMS,
                         "stable pair",
@@ -329,9 +345,46 @@ class PromptBackedNextStepDecisionProviderTest {
     }
 
     @Test
+    void shouldRequireChineseForProposalReasonAndSpecialPathJustifications() {
+        RecordingGenerationPort generationPort = new RecordingGenerationPort(
+                new ReviewToolDecision("record_confirmed_terms", Map.of(), "record confirmed term"),
+                new LlmStructuredOutputException("proposal rawOutput=not-json"),
+                new RecordConfirmedTermsProposal(
+                        RecordConfirmedTermsProposal.Action.NOT_APPLICABLE,
+                        "stable pair not ready",
+                        List.of()
+                ),
+                new ReviewToolDecision("read_confirmed_terms", Map.of("sourceTerms", List.of("Patrick Modiano")), "continue lookup")
+        );
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                new ReviewAgentSystemPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                generationPort,
+                new ReviewToolDecisionContractValidator()
+        );
+
+        ReviewToolDecision decision = provider.decide(sampleSessionWithEvidence(
+                List.of("confirmedTerm=Patrick Modiano->PatricZh"),
+                List.of(),
+                List.of()
+        ));
+
+        assertEquals("read_confirmed_terms", decision.toolName());
+        assertEquals(2, generationPort.proposalPrompts().size());
+        assertEquals(2, generationPort.prompts().size());
+        assertTrue(generationPort.proposalPrompts().get(0).contains("当前项目优先中文"));
+        assertTrue(generationPort.proposalPrompts().get(0).contains("reason:"));
+        assertTrue(generationPort.proposalPrompts().get(1).contains("当前项目优先中文"));
+        assertTrue(generationPort.proposalPrompts().get(1).contains("reason"));
+        assertTrue(generationPort.prompts().get(1).contains("当前项目优先中文"));
+        assertTrue(generationPort.prompts().get(1).contains("proposalReason"));
+    }
+
+    @Test
     void shouldReplanNextStepWhenProposalReturnsNotApplicable() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
-                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed term"),
+                new ReviewToolDecision("record_confirmed_terms", Map.of(), "record confirmed term"),
                 new RecordConfirmedTermsProposal(
                         RecordConfirmedTermsProposal.Action.NOT_APPLICABLE,
                         "pair not stable enough",
@@ -362,7 +415,7 @@ class PromptBackedNextStepDecisionProviderTest {
     @Test
     void shouldKeepProposalEntryOrderWhenMultiplePairsAreReturned() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
-                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed terms"),
+                new ReviewToolDecision("record_confirmed_terms", Map.of(), "record confirmed terms"),
                 new RecordConfirmedTermsProposal(
                         RecordConfirmedTermsProposal.Action.RECORD_CONFIRMED_TERMS,
                         "multiple stable pairs",
@@ -394,7 +447,7 @@ class PromptBackedNextStepDecisionProviderTest {
     @Test
     void shouldRetryProposalAssemblyFailureWithinUnifiedRepairLoop() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
-                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed term"),
+                new ReviewToolDecision("record_confirmed_terms", Map.of(), "record confirmed term"),
                 new RecordConfirmedTermsProposal(
                         RecordConfirmedTermsProposal.Action.RECORD_CONFIRMED_TERMS,
                         "conflicting pair",
@@ -431,7 +484,7 @@ class PromptBackedNextStepDecisionProviderTest {
     @Test
     void shouldRetryProposalStructuredFailureWithinUnifiedRepairLoop() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
-                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed term"),
+                new ReviewToolDecision("record_confirmed_terms", Map.of(), "record confirmed term"),
                 new LlmStructuredOutputException("proposal rawOutput=not-json"),
                 new RecordConfirmedTermsProposal(
                         RecordConfirmedTermsProposal.Action.RECORD_CONFIRMED_TERMS,
@@ -463,7 +516,7 @@ class PromptBackedNextStepDecisionProviderTest {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
                 new LlmStructuredOutputException("structured generation output cannot be parsed as structured JSON; rawOutput=bad-next-step-1"),
                 new LlmStructuredOutputException("structured generation output cannot be parsed as structured JSON; rawOutput=bad-next-step-2"),
-                new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of("Patrick Modiano", "placeholder")), "record confirmed term"),
+                new ReviewToolDecision("record_confirmed_terms", Map.of(), "record confirmed term"),
                 new LlmStructuredOutputException("proposal rawOutput=bad-proposal-1"),
                 new LlmStructuredOutputException("proposal rawOutput=bad-proposal-2"),
                 new RecordConfirmedTermsProposal(
@@ -495,10 +548,14 @@ class PromptBackedNextStepDecisionProviderTest {
 
 
     @Test
-    void shouldNotUseLegacyEntriesRepairAsProposalMainPathRepair() {
+    void shouldIgnoreEmptyRouteStageEntriesAndUseProposalMainPath() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
                 new ReviewToolDecision("record_confirmed_terms", Map.of("entries", Map.of()), "record term"),
-                new ReviewToolDecision("read_confirmed_terms", Map.of("sourceTerms", List.of("Bernolle")), "continue investigation")
+                new RecordConfirmedTermsProposal(
+                        RecordConfirmedTermsProposal.Action.RECORD_CONFIRMED_TERMS,
+                        "stable pair",
+                        List.of(new RecordConfirmedTermEntry("Bernolle", "Bernolle CN"))
+                )
         );
         PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
                 new InvestigationPromptBuilder(),
@@ -508,25 +565,31 @@ class PromptBackedNextStepDecisionProviderTest {
                 new ReviewToolDecisionContractValidator()
         );
 
-        ReviewToolDecision decision = provider.decide(sampleSession());
+        ReviewToolDecision decision = provider.decide(sampleSessionWithEvidence(
+                List.of("confirmedTerm=Bernolle->Bernolle CN"),
+                List.of(),
+                List.of()
+        ));
 
-        assertEquals("read_confirmed_terms", decision.toolName());
-        assertEquals(2, generationPort.prompts().size());
-        String repairPrompt = generationPort.prompts().get(1);
-        assertTrue(repairPrompt.contains("validationError: invalid_argument:entries"));
-        assertFalse(repairPrompt.contains("[Record Confirmed Terms Proposal Repair]"));
-        assertNoMojibake(repairPrompt);
+        assertEquals("record_confirmed_terms", decision.toolName());
+        assertEquals(Map.of("Bernolle", "Bernolle CN"), decision.arguments().get("entries"));
+        assertEquals(1, generationPort.prompts().size());
+        assertEquals(1, generationPort.proposalPrompts().size());
     }
 
     @Test
-    void shouldRequireReasonPairsToAlsoAppearInEntriesDuringEntriesRepair() {
+    void shouldIgnoreReasonOnlyPairsUntilProposalAssemblesEntries() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
                 new ReviewToolDecision(
                         "record_confirmed_terms",
                         Map.of("entries", Map.of()),
                         "confirmed pair: Editeur d'art->art publisher"
                 ),
-                new ReviewToolDecision("read_confirmed_terms", Map.of("sourceTerms", List.of("Editeur d'art")), "continue investigation")
+                new RecordConfirmedTermsProposal(
+                        RecordConfirmedTermsProposal.Action.RECORD_CONFIRMED_TERMS,
+                        "stable pair",
+                        List.of(new RecordConfirmedTermEntry("Editeur d'art", "art publisher"))
+                )
         );
         PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
                 new InvestigationPromptBuilder(),
@@ -536,19 +599,16 @@ class PromptBackedNextStepDecisionProviderTest {
                 new ReviewToolDecisionContractValidator()
         );
 
-        ReviewToolDecision decision = provider.decide(sampleSession());
+        ReviewToolDecision decision = provider.decide(sampleSessionWithEvidence(
+                List.of("confirmedTerm=Editeur d'art->art publisher"),
+                List.of(),
+                List.of()
+        ));
 
-        assertEquals("read_confirmed_terms", decision.toolName());
-        assertEquals(2, generationPort.prompts().size());
-        String repairPrompt = generationPort.prompts().get(1);
-        assertTrue(repairPrompt.contains("reason"));
-        assertTrue(repairPrompt.contains("source->target term pair"));
-        assertTrue(repairPrompt.contains("arguments.entries"));
-        assertTrue(repairPrompt.contains("reason already contains explicit pair"));
-        assertTrue(repairPrompt.contains("entries={}"));
-        assertTrue(repairPrompt.contains("must copy the same pair into arguments.entries"));
-        assertTrue(repairPrompt.contains("candidate pairs cannot appear only in reason"));
-        assertNoMojibake(repairPrompt);
+        assertEquals("record_confirmed_terms", decision.toolName());
+        assertEquals(Map.of("Editeur d'art", "art publisher"), decision.arguments().get("entries"));
+        assertEquals(1, generationPort.prompts().size());
+        assertEquals(1, generationPort.proposalPrompts().size());
     }
 
     @Test

@@ -121,7 +121,7 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
     @Override
     public ReviewToolDecision generateNextToolDecision(String systemPrompt, String userPrompt) {
         ReviewToolDecision decision = invoke(systemPrompt, userPrompt, investigationSchema(), ReviewToolDecision.class);
-        var validationError = contractValidator.validate(decision, toolRegistry);
+        var validationError = contractValidator.validateNextStepDecision(decision, toolRegistry);
         if (validationError.isPresent()) {
             throw new LlmStructuredOutputException("Review agent invalid structured tool decision: "
                     + validationError.orElseThrow()
@@ -341,7 +341,7 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
                                 .build())
                         .addProperty("arguments", investigationArgumentsSchema())
                         .addProperty("reason", JsonStringSchema.builder()
-                                .description("Tool-call rationale must stay in the top-level reason field; request_human_review also uses the top-level reason. When toolName=record_confirmed_terms, candidate pairs must be placed in arguments.entries and cannot appear only in reason.")
+                                .description("Tool-call rationale must stay in the top-level reason field; request_human_review also uses the top-level reason. When toolName=record_confirmed_terms, this next-step decision only routes into the record_confirmed_terms path; final confirmed-term pairs belong to the later proposal stage, not this reason field.")
                                 .build())
                         .required("toolName", "arguments", "reason")
                         .additionalProperties(false)
@@ -353,30 +353,66 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
         StringBuilder builder = new StringBuilder();
         builder.append("Review Agent tool decision. Only arguments declared by the selected tool definition are allowed. ")
                 .append("Undeclared arguments must be omitted; request_human_review arguments must be {}. ")
-                .append("When toolName=record_confirmed_terms, candidate pairs must be written in arguments.entries and cannot appear only in reason.");
+                .append("When toolName=record_confirmed_terms, this next-step decision only selects that tool path; final confirmed-term pairs are produced in the later proposal stage, not in this first-stage reason.");
         for (ReviewToolDefinition definition : toolRegistry.definitions()) {
             builder.append("\nTool ")
                     .append(definition.toolName())
                     .append(": allowedArguments=")
                     .append(definition.allowedArguments())
                     .append(", requiredArguments=")
-                    .append(definition.requiredArguments());
-            if (definition.argumentSchemas().isEmpty()) {
-                builder.append(", arguments must be {}");
-            } else {
-                builder.append(", argumentRequirements=")
-                        .append(definition.renderArgumentRequirements())
-                        .append(", argumentsExample=")
-                        .append(definition.renderArgumentsExample());
+                    .append(definition.requiredArguments())
+                    .append(", argumentRequirements=")
+                    .append(renderArgumentRequirements(definition));
+            String compactExample = renderCompactArgumentsExample(definition);
+            if (!compactExample.isBlank()) {
+                builder.append(", argumentsExample=")
+                        .append(compactExample);
+            }
+            switch (definition.toolName()) {
+                case "record_confirmed_terms" -> builder.append(", record only stable source-target pairs supported by the current working-set evidence.");
+                case "request_human_review" -> builder.append(", use only for real unresolved semantics that local tools cannot close.");
+                case "complete_working_set" -> builder.append(", use only for working-set completion, not project completion.");
+                case "complete_project" -> builder.append(", use for pending-empty, project-ready endgame.");
+                default -> {
+                }
             }
         }
         return builder.toString();
     }
+
+    private String renderArgumentRequirements(ReviewToolDefinition definition) {
+        if (definition.argumentSchemas().isEmpty()) {
+            return "(none)";
+        }
+        StringBuilder builder = new StringBuilder();
+        definition.argumentSchemas().forEach(schema -> {
+            if (!builder.isEmpty()) {
+                builder.append("; ");
+            }
+            builder.append(schema.name())
+                    .append(": ")
+                    .append(schema.type())
+                    .append(" (")
+                    .append(schema.required() ? "required" : "optional")
+                    .append(")");
+        });
+        return builder.toString();
+    }
+
+    private String renderCompactArgumentsExample(ReviewToolDefinition definition) {
+        return switch (definition.toolName()) {
+            case "read_previous_chunks", "read_next_chunks", "read_confirmed_terms",
+                    "lookup_knowledge_cards", "record_confirmed_terms", "complete_working_set" ->
+                    definition.renderArgumentsExample();
+            default -> "";
+        };
+    }
+
     private JsonObjectSchema investigationArgumentsSchema() {
         String entriesDescription = toolRegistry.contains("record_confirmed_terms")
                 ? toolRegistry.require("record_confirmed_terms")
                 .findArgumentSchema("entries")
-                .map(schema -> schema.schemaDescription())
+                .map(schema -> sanitizeRecordConfirmedTermsEntriesDescriptionForNextStep(schema.schemaDescription()))
                 .orElse("record_confirmed_terms entries")
                 : "record_confirmed_terms entries";
         return JsonObjectSchema.builder()
@@ -391,6 +427,16 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
                         .build())
                 .additionalProperties(false)
                 .build();
+    }
+
+    private String sanitizeRecordConfirmedTermsEntriesDescriptionForNextStep(String originalDescription) {
+        if (originalDescription == null || originalDescription.isBlank()) {
+            return "record_confirmed_terms route-stage entries placeholder. Final confirmed-term pairs are produced in the later proposal stage.";
+        }
+        return originalDescription.replace(
+                " When toolName=record_confirmed_terms, candidate pairs must appear in arguments.entries, not only in reason.",
+                " In next-step routing, entries may remain a route-stage placeholder; final confirmed-term pairs are produced in the later proposal stage."
+        );
     }
 
     private static JsonArraySchema stringArray() {

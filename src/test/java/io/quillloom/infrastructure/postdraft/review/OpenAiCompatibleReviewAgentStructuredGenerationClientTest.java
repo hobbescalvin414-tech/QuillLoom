@@ -371,9 +371,12 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
 
         assertTrue(schemaText.contains("read_confirmed_terms"));
         assertTrue(schemaText.contains("sourceTerms"));
+        assertTrue(schemaText.contains("argumentRequirements=sourceTerms: string[] (required)"));
         assertTrue(schemaText.contains("request_human_review"));
         assertTrue(schemaText.contains("arguments must be {}"));
         assertTrue(schemaText.contains("Only arguments declared by the selected tool definition are allowed"));
+        assertFalse(schemaText.contains("whenToUse="));
+        assertFalse(schemaText.contains("resultSemantics="));
     }
 
     @Test
@@ -397,7 +400,7 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
         ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
         verify(chatModel).chat(captor.capture());
         String schemaText = String.valueOf(captor.getValue().responseFormat().jsonSchema());
-        String entriesSchemaDescription = ReviewToolRegistry.defaultRegistry()
+        String registryEntriesSchemaDescription = ReviewToolRegistry.defaultRegistry()
                 .require("record_confirmed_terms")
                 .findArgumentSchema("entries")
                 .orElseThrow()
@@ -406,7 +409,10 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
         assertTrue(schemaText.contains("record_confirmed_terms"));
         assertTrue(schemaText.contains("<source-term>"));
         assertTrue(schemaText.contains("<target-term>"));
-        assertTrue(schemaText.contains(entriesSchemaDescription));
+        assertTrue(schemaText.contains("Non-empty JSON map from source term to target term."));
+        assertTrue(schemaText.contains("later proposal stage"));
+        assertFalse(schemaText.contains("candidate pairs must appear in arguments.entries, not only in reason."));
+        assertTrue(registryEntriesSchemaDescription.contains("candidate pairs must appear in arguments.entries, not only in reason."));
         assertTrue(schemaText.contains("\"sourceTerm\""));
         assertTrue(schemaText.contains("[\"A=B\"]"));
         assertFalse(schemaText.contains("whenToUse="));
@@ -415,7 +421,7 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
     }
 
     @Test
-    void shouldStateThatRecordConfirmedTermsPairsMustBePlacedInEntriesNotReason() {
+    void shouldStateThatRecordConfirmedTermsUsesRouteStageSemanticsInNextStepSchema() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
                 .aiMessage(AiMessage.from("""
@@ -437,9 +443,9 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
         String schemaText = String.valueOf(captor.getValue().responseFormat().jsonSchema());
 
         assertTrue(schemaText.contains("record_confirmed_terms"));
-        assertTrue(schemaText.contains("candidate pairs"));
-        assertTrue(schemaText.contains("arguments.entries"));
-        assertTrue(schemaText.contains("cannot appear only in reason"));
+        assertTrue(schemaText.contains("only selects that tool path"));
+        assertTrue(schemaText.contains("later proposal stage"));
+        assertFalse(schemaText.contains("candidate pairs must be written in arguments.entries"));
     }
 
     @Test
@@ -630,7 +636,29 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
     }
 
     @Test
-    void shouldIncludeRawOutputWhenRecordConfirmedTermsEntriesShapeIsInvalid() {
+    void shouldAllowRouteStageRecordConfirmedTermsWithoutEntries() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from("""
+                        {
+                          "toolName": "record_confirmed_terms",
+                          "arguments": {},
+                          "reason": "record term"
+                        }
+                        """))
+                .build());
+
+        OpenAiCompatibleReviewAgentStructuredGenerationClient client =
+                new OpenAiCompatibleReviewAgentStructuredGenerationClient(chatModel, new ObjectMapper());
+
+        ReviewToolDecision decision = client.generateNextToolDecision(null, "prompt");
+
+        assertEquals("record_confirmed_terms", decision.toolName());
+        assertTrue(decision.arguments().isEmpty());
+    }
+
+    @Test
+    void shouldAllowRouteStageRecordConfirmedTermsPairObjectWithoutRejectingEntries() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
                 .aiMessage(AiMessage.from("""
@@ -650,19 +678,14 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
         OpenAiCompatibleReviewAgentStructuredGenerationClient client =
                 new OpenAiCompatibleReviewAgentStructuredGenerationClient(chatModel, new ObjectMapper());
 
-        LlmStructuredOutputException error = assertThrows(
-                LlmStructuredOutputException.class,
-                () -> client.generateNextToolDecision(null, "prompt")
-        );
+        ReviewToolDecision decision = client.generateNextToolDecision(null, "prompt");
 
-        assertTrue(error.getMessage().contains("invalid_argument:entries"));
-        assertTrue(error.getMessage().contains("\"toolName\":\"record_confirmed_terms\""));
-        assertTrue(error.getMessage().contains("\"sourceTerm\":\"Bernolle\""));
-        assertTrue(error.getMessage().contains("\"targetTerm\":\"Bernolle translated\""));
+        assertEquals("record_confirmed_terms", decision.toolName());
+        assertTrue(decision.arguments().containsKey("entries"));
     }
 
     @Test
-    void shouldIncludeRawOutputWhenRecordConfirmedTermsEntriesIsEmptyObject() {
+    void shouldAllowRouteStageRecordConfirmedTermsWithEmptyEntriesObject() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
                 .aiMessage(AiMessage.from("""
@@ -679,14 +702,10 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
         OpenAiCompatibleReviewAgentStructuredGenerationClient client =
                 new OpenAiCompatibleReviewAgentStructuredGenerationClient(chatModel, new ObjectMapper());
 
-        LlmStructuredOutputException error = assertThrows(
-                LlmStructuredOutputException.class,
-                () -> client.generateNextToolDecision(null, "prompt")
-        );
+        ReviewToolDecision decision = client.generateNextToolDecision(null, "prompt");
 
-        assertTrue(error.getMessage().contains("invalid_argument:entries"));
-        assertTrue(error.getMessage().contains("\"toolName\":\"record_confirmed_terms\""));
-        assertTrue(error.getMessage().contains("\"entries\":{}"));
+        assertEquals("record_confirmed_terms", decision.toolName());
+        assertTrue(decision.arguments().containsKey("entries"));
     }
 }
 

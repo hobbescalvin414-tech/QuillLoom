@@ -138,6 +138,7 @@ public class ReviewToolExecutor {
                                                       String traceName) {
         PostDraftReviewSession session = requireFocusSession(runtime);
         List<PostDraftChunkRecord> safeChunks = chunks == null ? List.of() : List.copyOf(chunks);
+        LinkedHashSet<String> currentChunkIds = new LinkedHashSet<>(session.workingSet().chunkIds());
         LinkedHashSet<String> nextChunkIds = new LinkedHashSet<>(session.workingSet().chunkIds());
         LinkedHashMap<String, ReviewContextChunkSnapshot> boundarySnapshots = new LinkedHashMap<>();
         for (ReviewContextChunkSnapshot snapshot : session.boundaryWindow().snapshots()) {
@@ -162,6 +163,13 @@ public class ReviewToolExecutor {
             String summary = summarizeChunk(chunk);
             readContext.add(summary);
             evidence.add(summary);
+        }
+        if (nextChunkIds.equals(currentChunkIds)) {
+            return ReviewToolExecutionResult.rejected(
+                    call,
+                    appendAudit(runtime, call, "redundant_adjacent_read"),
+                    ReviewGuardrailRejection.rejected(call.toolName(), "redundant_adjacent_read")
+            );
         }
         PostDraftReviewSession updatedSession = session
                 .withWorkingSet(session.workingSet().expandTo(List.copyOf(nextChunkIds)))
@@ -650,6 +658,15 @@ public class ReviewToolExecutor {
                     + " is missing required arguments. Retry only after supplying requiredArguments="
                     + registry.require(call.toolName()).requiredArguments()
                     + ".";
+        }
+        if ("redundant_adjacent_read".equals(detail)) {
+            String otherDirection = "read_previous_chunks".equals(call.toolName())
+                    ? "read_next_chunks"
+                    : "read_previous_chunks";
+            return "local_replan_hint -> the current adjacent-read direction produced no net-new chunk. "
+                    + "Do not repeat the same direction. If more context is still needed, try "
+                    + otherDirection
+                    + "; otherwise prefer evaluate_focus or complete_working_set when evidence is already sufficient.";
         }
         if (detail.startsWith("complete_working_set chunkIds must include anchorChunkId=")) {
             return "local_replan_hint -> complete_working_set.chunkIds must include the current anchor="

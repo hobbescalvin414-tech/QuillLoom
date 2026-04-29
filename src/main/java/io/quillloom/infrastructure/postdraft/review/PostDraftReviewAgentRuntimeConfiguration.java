@@ -121,7 +121,11 @@ public class PostDraftReviewAgentRuntimeConfiguration {
 
     @Bean
     public ReviewRuntimeVisualizer reviewRuntimeVisualizer(ReviewAgentRuntimeProperties properties) {
-        return new ConsoleReviewRuntimeVisualizer(System.out, properties.getConsolePreviewMaxLength());
+        return new ConsoleReviewRuntimeVisualizer(
+                System.out,
+                properties.getConsolePreviewMaxLength(),
+                properties.getConsoleMode()
+        );
     }
 
     @Bean

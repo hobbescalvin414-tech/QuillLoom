@@ -16,11 +16,39 @@ public interface ReviewRuntimeVisualizer {
     default void focusSelected(ProjectReviewRuntimeSession runtime) {
     }
 
+    default void focusRoundStarted(ProjectReviewRuntimeSession runtime) {
+    }
+
+    default void decisionProduced(ProjectReviewRuntimeSession runtime,
+                                  ReviewToolDecision decision) {
+    }
+
     default void toolCalled(ProjectReviewRuntimeSession runtime, ReviewToolDecision decision) {
     }
 
     default void toolCompleted(ProjectReviewRuntimeSession beforeRuntime,
                                ReviewToolExecutionResult executionResult) {
+    }
+
+    default void repairTriggered(ProjectReviewRuntimeSession runtime,
+                                 String repairKind,
+                                 String detail) {
+    }
+
+    default void toolRejected(ProjectReviewRuntimeSession runtime,
+                              String detail) {
+    }
+
+    default void localReplanTriggered(ProjectReviewRuntimeSession runtime,
+                                      String detail) {
+    }
+
+    default void containableFailureCaptured(ProjectReviewRuntimeSession runtime,
+                                            String failureCode,
+                                            String diagnosticSummary) {
+    }
+
+    default void focusRoundFinished(ProjectReviewRuntimeSession runtime) {
     }
 
     default void projectFinished(ProjectReviewRuntimeSession runtime) {
