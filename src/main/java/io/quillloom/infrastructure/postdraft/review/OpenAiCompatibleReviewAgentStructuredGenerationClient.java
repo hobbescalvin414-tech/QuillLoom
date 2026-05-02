@@ -39,6 +39,7 @@ import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.net.http.HttpConnectTimeoutException;
+import java.util.stream.Collectors;
 
 public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements ReviewAgentStructuredGenerationPort {
 
@@ -123,9 +124,13 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
         ReviewToolDecision decision = invoke(systemPrompt, userPrompt, investigationSchema(), ReviewToolDecision.class);
         var validationError = contractValidator.validateNextStepDecision(decision, toolRegistry);
         if (validationError.isPresent()) {
-            throw new LlmStructuredOutputException("Review agent invalid structured tool decision: "
-                    + validationError.orElseThrow()
-                    + renderRawStructuredOutputDetail(decision));
+            String error = validationError.orElseThrow();
+            throw new LlmStructuredOutputException(
+                    "Review agent invalid structured tool decision: "
+                            + error
+                            + renderRawStructuredOutputDetail(decision),
+                    buildReviewAgentErrorContext(error, decision)
+            );
         }
         return decision;
     }
@@ -337,7 +342,7 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
                 .rootElement(JsonObjectSchema.builder()
                         .description(investigationSchemaDescription())
                         .addProperty("toolName", JsonStringSchema.builder()
-                                .description("Must be a tool name registered in ReviewToolRegistry.")
+                                .description(toolNameDescription())
                                 .build())
                         .addProperty("arguments", investigationArgumentsSchema())
                         .addProperty("reason", JsonStringSchema.builder()
@@ -353,7 +358,10 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
         StringBuilder builder = new StringBuilder();
         builder.append("Review Agent tool decision. Only arguments declared by the selected tool definition are allowed. ")
                 .append("Undeclared arguments must be omitted; request_human_review arguments must be {}. ")
-                .append("When toolName=record_confirmed_terms, this next-step decision only selects that tool path; final confirmed-term pairs are produced in the later proposal stage, not in this first-stage reason.");
+                .append("When toolName=record_confirmed_terms, this next-step decision only selects that tool path; final confirmed-term pairs are produced in the later proposal stage, not in this first-stage reason. ")
+                .append("Allowed toolNames are exactly: ")
+                .append(renderAllowedToolNamesInline())
+                .append(". Do not invent aliases, merged names, or paraphrases. Forbidden invalid aliases include: read_chunks, read_adjacent_chunks, adjacent_read, read_context_chunks.");
         for (ReviewToolDefinition definition : toolRegistry.definitions()) {
             builder.append("\nTool ")
                     .append(definition.toolName())
@@ -378,6 +386,28 @@ public class OpenAiCompatibleReviewAgentStructuredGenerationClient implements Re
             }
         }
         return builder.toString();
+    }
+
+    private String toolNameDescription() {
+        return "Allowed toolNames are exactly: "
+                + renderAllowedToolNamesInline()
+                + ". toolName must exactly match one registered tool name from that list. "
+                + "Do not invent aliases, merged names, or paraphrases. "
+                + "Forbidden invalid aliases include: read_chunks, read_adjacent_chunks, adjacent_read, read_context_chunks.";
+    }
+
+    private String renderAllowedToolNamesInline() {
+        return toolRegistry.definitions().stream()
+                .map(ReviewToolDefinition::toolName)
+                .collect(Collectors.joining(", "));
+    }
+
+    private LlmStructuredOutputException.ReviewAgentErrorContext buildReviewAgentErrorContext(String validationError,
+                                                                                              ReviewToolDecision decision) {
+        if (!"unregistered_tool".equals(validationError) || decision == null || decision.toolName() == null) {
+            return null;
+        }
+        return new LlmStructuredOutputException.ReviewAgentErrorContext(validationError, decision.toolName());
     }
 
     private String renderArgumentRequirements(ReviewToolDefinition definition) {

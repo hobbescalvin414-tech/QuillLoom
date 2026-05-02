@@ -212,6 +212,56 @@ class PromptBackedNextStepDecisionProviderTest {
     }
 
     @Test
+    void shouldInjectOnlyUnregisteredToolRepairGuidanceForUnknownToolName() {
+        RecordingGenerationPort generationPort = new RecordingGenerationPort(
+                unregisteredToolException("read_adjacent_chunks"),
+                new ReviewToolDecision("read_previous_chunks", Map.of("count", 1), "fixed")
+        );
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                new ReviewAgentSystemPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                generationPort,
+                new ReviewToolDecisionContractValidator()
+        );
+
+        ReviewToolDecision decision = provider.decide(sampleSession());
+
+        assertEquals("read_previous_chunks", decision.toolName());
+        assertEquals(2, generationPort.prompts().size());
+        String repairPrompt = generationPort.prompts().get(1);
+        assertTrue(repairPrompt.contains("[unregistered_tool repair]"));
+        assertTrue(repairPrompt.contains("validationError: unregistered_tool"));
+        assertTrue(repairPrompt.contains("previousInvalidToolName: read_adjacent_chunks"));
+        assertTrue(repairPrompt.contains("Allowed toolNames are exactly"));
+        assertFalse(repairPrompt.contains("[entries repair]"));
+    }
+
+    @Test
+    void shouldNotTreatStructuredOutputMessageTextContainingUnregisteredToolAsUnregisteredToolRepair() {
+        RecordingGenerationPort generationPort = new RecordingGenerationPort(
+                new LlmStructuredOutputException("structured generation output cannot be parsed as structured JSON; rawOutput={\"reason\":\"mentions unregistered_tool but json is broken\"}"),
+                new ReviewToolDecision("read_previous_chunks", Map.of("count", 1), "fixed")
+        );
+        PromptBackedNextStepDecisionProvider provider = new PromptBackedNextStepDecisionProvider(
+                new InvestigationPromptBuilder(),
+                new ReviewAgentSystemPromptBuilder(),
+                ReviewToolRegistry.defaultRegistry(),
+                generationPort,
+                new ReviewToolDecisionContractValidator()
+        );
+
+        ReviewToolDecision decision = provider.decide(sampleSession());
+
+        assertEquals("read_previous_chunks", decision.toolName());
+        assertEquals(2, generationPort.prompts().size());
+        String repairPrompt = generationPort.prompts().get(1);
+        assertTrue(repairPrompt.contains("structuredOutputError: structured generation output cannot be parsed as structured JSON"));
+        assertFalse(repairPrompt.contains("[unregistered_tool repair]"));
+        assertFalse(repairPrompt.contains("previousInvalidToolName:"));
+    }
+
+    @Test
     void shouldUseRefactorRepairSectionsInDecisionRepairPrompt() {
         RecordingGenerationPort generationPort = new RecordingGenerationPort(
                 new ReviewToolDecision("read_previous_chunks", Map.of(), "need context"),
@@ -373,11 +423,11 @@ class PromptBackedNextStepDecisionProviderTest {
         assertEquals("read_confirmed_terms", decision.toolName());
         assertEquals(2, generationPort.proposalPrompts().size());
         assertEquals(2, generationPort.prompts().size());
-        assertTrue(generationPort.proposalPrompts().get(0).contains("当前项目优先中文"));
+        assertTrue(generationPort.proposalPrompts().get(0).contains("The current project default is Chinese"));
         assertTrue(generationPort.proposalPrompts().get(0).contains("reason:"));
-        assertTrue(generationPort.proposalPrompts().get(1).contains("当前项目优先中文"));
+        assertTrue(generationPort.proposalPrompts().get(1).contains("The current project default is Chinese"));
         assertTrue(generationPort.proposalPrompts().get(1).contains("reason"));
-        assertTrue(generationPort.prompts().get(1).contains("当前项目优先中文"));
+        assertTrue(generationPort.prompts().get(1).contains("The current project default is Chinese"));
         assertTrue(generationPort.prompts().get(1).contains("proposalReason"));
     }
 
@@ -898,6 +948,13 @@ class PromptBackedNextStepDecisionProviderTest {
                         false
                 )
         )));
+    }
+
+    private static LlmStructuredOutputException unregisteredToolException(String previousInvalidToolName) {
+        return new LlmStructuredOutputException(
+                "Review agent invalid structured tool decision: unregistered_tool",
+                new LlmStructuredOutputException.ReviewAgentErrorContext("unregistered_tool", previousInvalidToolName)
+        );
     }
 
     private static PostDraftReviewSession sampleSessionWithEvidence(List<String> keyEvidence,

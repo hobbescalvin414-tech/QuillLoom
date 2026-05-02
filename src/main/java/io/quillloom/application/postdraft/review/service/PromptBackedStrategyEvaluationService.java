@@ -34,6 +34,9 @@ public class PromptBackedStrategyEvaluationService {
             - Prefer LIGHT_EDIT for local continuity, logic, or naming repairs that stay within the current working set.
             - Choose KEEP only when continuity, logic, naming consistency, and translation completeness are already sufficiently verified.
             - Treat working-set text context as direct evidence, not just summary commentary.
+            - Do not choose REQUIRE_HUMAN_REVIEW while a clearly high-value, non-mechanical local next action is still available.
+            - But do not block human escalation only because some low-value local action is still theoretically possible; repeated evidence fetching, low-yield adjacent expansion, or mechanical reevaluation are not sufficient reasons to avoid escalation.
+            - Choose REQUIRE_HUMAN_REVIEW only when the local path is already substantially closed and a real semantic issue still remains unresolved.
             Return one JSON object only.
             """;
 

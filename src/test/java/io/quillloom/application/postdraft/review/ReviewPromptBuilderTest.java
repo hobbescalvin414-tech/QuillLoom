@@ -102,6 +102,10 @@ class ReviewPromptBuilderTest {
         assertTrue(prompt.contains("[Global Working Discipline]"));
         assertTrue(prompt.contains("[Global Completion / Escalation Rules]"));
         assertTrue(prompt.contains("[Output Contract]"));
+        assertTrue(prompt.contains("[Registered Tool Names]"));
+        assertTrue(prompt.contains("toolName must be exactly one of the registered names above."));
+        assertTrue(prompt.contains("read_previous_chunks"));
+        assertTrue(prompt.contains("read_adjacent_chunks"));
         assertFalse(prompt.contains("[Available Tools]"));
         assertFalse(prompt.contains("Tool: read_confirmed_terms"));
         assertNoMojibake(prompt);
@@ -114,7 +118,7 @@ class ReviewPromptBuilderTest {
 
         assertTrue(prompt.contains("You are a literary translation review agent."));
         assertTrue(prompt.contains("Do not treat low-priority signals as sufficient grounds for high-risk actions by themselves."));
-        assertTrue(prompt.contains("confirmedTermLookupMiss only means there is no current hit; it does not authorize writing confirmed terms."));
+        assertTrue(prompt.contains("confirmedTermLookupMiss only means there is no current hit. By itself it does not justify recording confirmed terms."));
         assertTrue(prompt.contains("Strategy is an evaluation result, not a completion signal."));
         assertNoMojibake(prompt);
     }
@@ -138,7 +142,8 @@ class ReviewPromptBuilderTest {
         assertTrue(prompt.contains("[Authority Rules]"));
         assertTrue(prompt.contains("sourceText is the highest-authority textual evidence."));
         assertTrue(prompt.contains("read_confirmed_terms is the project-level authoritative lookup."));
-        assertTrue(prompt.contains("confirmedTermLookupMiss only means there is no current hit; it does not authorize writing confirmed terms."));
+        assertTrue(prompt.contains("confirmedTermLookupMiss only means there is no current hit"));
+        assertTrue(prompt.contains("If the current naming item is visible in the working set and a stable, confirmable source-target pair has already formed"));
     }
 
     @Test
@@ -167,13 +172,13 @@ class ReviewPromptBuilderTest {
         String investigationPrompt = new InvestigationPromptBuilder()
                 .build(sampleSession(), ReviewToolRegistry.defaultRegistry().definitions(), List.of());
 
-        assertTrue(systemPrompt.contains("当前项目优先中文"));
+        assertTrue(systemPrompt.contains("The current project default is Chinese"));
         assertTrue(systemPrompt.contains("reason / questionForHuman"));
-        assertTrue(systemPrompt.contains("sourceText 原文引用"));
-        assertTrue(investigationPrompt.contains("当前项目默认用中文"));
+        assertTrue(systemPrompt.contains("sourceText quotes"));
+        assertTrue(investigationPrompt.contains("The current project default is Chinese"));
         assertTrue(investigationPrompt.contains("reason"));
         assertTrue(investigationPrompt.contains("questionForHuman"));
-        assertTrue(investigationPrompt.contains("tool 名称"));
+        assertTrue(investigationPrompt.contains("tool names"));
     }
 
     @Test
@@ -330,6 +335,16 @@ class ReviewPromptBuilderTest {
 
         assertTrue(prompt.contains("prefer complete_project instead of continuing the old focus"));
         assertTrue(prompt.contains("If currentFocusChunkStillPending=false, do not call complete_working_set for the stale focus."));
+    }
+
+    @Test
+    void shouldCloseKeepIntoCurrentFocusCompletionInsteadOfRepeatedEvaluation() {
+        String prompt = new ReviewAgentSystemPromptBuilder()
+                .build(ReviewToolRegistry.defaultRegistry().definitions());
+
+        assertTrue(prompt.contains("If KEEP is already supported"));
+        assertTrue(prompt.contains("move to completion for the current focus"));
+        assertTrue(prompt.contains("instead of repeating evaluate_focus just to restate the same KEEP conclusion"));
     }
 
     @Test

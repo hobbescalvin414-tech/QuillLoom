@@ -286,7 +286,8 @@
    - do not introduce new persisted memory types or change persistence/resume/compact contracts only to support prompt layering
 
 ## 2026-04-24 Prompt Refactor Follow-up Clarifications
-1. ecord_confirmed_terms keeps its current narrow two-phase special path:
+1. 
+ecord_confirmed_terms keeps its current narrow two-phase special path:
    - next-step selects the tool
    - proposal generation / proposal repair / assembly / proposal NOT_APPLICABLE local replan remain tool-local subflow only
    - this must not be generalized into a new global proposal phase
@@ -294,8 +295,10 @@
    - each major review dimension should contribute at least 1-2 executable gate lines
    - the appendix must not become a second normative source
 3. Prompt compression must preserve minimal semantic schema hints for high-risk tools:
-   - ecord_confirmed_terms
-   - equest_human_review
+   - 
+ecord_confirmed_terms
+   - 
+equest_human_review
    - complete_working_set
    - complete_project
    Shape-only schema wording is not sufficient for these tools.
@@ -426,5 +429,10 @@
 5. `decision_repair` guidance for `unregistered_tool` is removed from this round's minimal scope.
 6. If investigation prompt retains any extra wording, it must stay as a single weak reminder only, not a second protocol-definition block.
 7. Whitelist text must be rendered from `ReviewToolRegistry` as a single source of truth across system prompt, schema description, and unregistered-tool repair prompt.
-8. Full updated design is documented at:
+8. `previousInvalidToolName` must be carried by extending `LlmStructuredOutputException` with a concrete review-agent-specific structured context type; provider-side text parsing is not part of the formal design.
+9. `buildStructuredOutputRepairPrompt()` should inject specialized repair guidance by single-choice error-type branching:
+   - `unregistered_tool` -> unregistered-tool guidance only
+   - `invalid_argument:entries` -> entries guidance only
+   - otherwise -> no specialized guidance
+10. Full updated design is documented at:
    - `docs/superpowers/plans/2026-04-26-review-agent-unregistered-tool-prompt-hardening-design.md`

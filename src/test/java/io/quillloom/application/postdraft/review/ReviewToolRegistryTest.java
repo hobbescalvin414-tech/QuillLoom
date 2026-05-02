@@ -120,7 +120,9 @@ class ReviewToolRegistryTest {
         assertTrue(description.contains("chunk") || description.contains("confirmed"));
         assertTrue(argumentRequirements.contains("object{string:string}"));
         assertTrue(argumentRequirements.contains("entries"));
-        assertTrue(argumentRequirements.contains("Bernolle"));
+        assertTrue(argumentRequirements.contains("<source-term>"));
+        assertTrue(tool.whenToUse().contains("stable source->target pair"));
+        assertFalse(tool.whenNotToUse().contains("backfill draft-stage omissions"));
     }
 
     @Test
@@ -177,6 +179,15 @@ class ReviewToolRegistryTest {
         assertTrue(completeWorkingSet.nextStepGuidance().contains("complete_project"));
         assertTrue(completeProject.whenToUse().contains("pending chunks are empty"));
         assertTrue(completeProject.nextStepGuidance().contains("project close-out"));
+    }
+
+    @Test
+    void shouldClarifyContextOnlyAdjacentChunksDoNotBlockAnchorCompletion() {
+        ReviewToolDefinition tool = ReviewToolRegistry.defaultRegistry().require("complete_working_set");
+
+        assertTrue(tool.whenToUse().contains("anchor chunk is ready to submit"));
+        assertTrue(tool.nextStepGuidance().contains("Adjacent chunks read only as context evidence do not automatically become required chunkIds"));
+        assertTrue(tool.nextStepGuidance().contains("the current focus anchor may still be completed on its own"));
     }
 
     @Test

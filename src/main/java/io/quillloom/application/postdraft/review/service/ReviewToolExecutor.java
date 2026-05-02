@@ -331,17 +331,9 @@ public class ReviewToolExecutor {
     private ReviewToolExecutionResult executeRecordConfirmedTerms(ProjectReviewRuntimeSession runtime,
                                                                   ReviewToolCall call) {
         Map<String, String> entries = toStringMapFromArgument(call.arguments().get("entries"), "entries");
-        PostDraftReviewSession session = requireFocusSession(runtime);
-        if (!isSupportedByCurrentWorkingSetConfirmedTermUpdates(runtime, session, entries)) {
-            String detail = "invalid_record_confirmed_terms_basis:missing_working_set_confirmed_term_updates_support";
-            return ReviewToolExecutionResult.rejected(
-                    call,
-                    appendAudit(runtime, call, detail),
-                    ReviewGuardrailRejection.rejected(call.toolName(), detail)
-            );
-        }
-        if (isLowAuthorityLookupMissRecordRequest(session, call, entries)) {
-            String detail = "invalid_record_confirmed_terms_basis:lookup_miss_or_low_authority_notes";
+        Map<String, String> existingConfirmedTerms = reader.readConfirmedTerms(runtime.projectId(), List.copyOf(entries.keySet()));
+        if (!existingConfirmedTerms.isEmpty()) {
+            String detail = "invalid_record_confirmed_terms_basis:already_registered_in_project_confirmed_terms";
             return ReviewToolExecutionResult.rejected(
                     call,
                     appendAudit(runtime, call, detail),
@@ -714,9 +706,9 @@ public class ReviewToolExecutor {
                     + "If evidence is already enough, use complete_working_set; if issues remain, use evaluate_focus.";
         }
         if (detail.startsWith("invalid_record_confirmed_terms_basis:")) {
-            return "local_replan_hint -> Review Agent does not fill D missing confirmedTermUpdates. "
-                    + "confirmedTermLookupMiss, decisionNotes, transitionNote, and translatorCommentary are not sufficient basis for recording confirmed terms. "
-                    + "If the current translation is natural and has no project-level confirmed-term conflict, prefer complete_working_set. "
+            return "local_replan_hint -> record_confirmed_terms failed because the project-level confirmed-term table already contains the requested source term, "
+                    + "or because arguments.entries is invalid. Do not retry the same registration. "
+                    + "If the current translation is already acceptable, prefer complete_working_set. "
                     + "If a real translation issue exists, use evaluate_focus.";
         }
         if (detail.startsWith("invalid_high_risk_action_basis:")) {
@@ -824,30 +816,6 @@ public class ReviewToolExecutor {
         return parseCommaSeparated(normalized);
     }
 
-    private boolean isLowAuthorityLookupMissRecordRequest(PostDraftReviewSession session,
-                                                          ReviewToolCall call,
-                                                          Map<String, String> entries) {
-        if (entries.isEmpty()) {
-            return false;
-        }
-        Set<String> missedKeys = lookupMissKeys(session);
-        if (missedKeys.isEmpty()) {
-            return false;
-        }
-        boolean recordsPreviouslyMissedTerm = entries.keySet().stream()
-                .map(TermTextNormalizer::keyText)
-                .anyMatch(missedKeys::contains);
-        if (!recordsPreviouslyMissedTerm) {
-            return false;
-        }
-        String reason = safe(call.reason()).toLowerCase(java.util.Locale.ROOT);
-        return reason.contains("confirmedtermlookupmiss")
-                || reason.contains("lookup miss")
-                || reason.contains("decisionnotes")
-                || reason.contains("transitionnote")
-                || reason.contains("translatorcommentary");
-    }
-
     private boolean lacksHighRiskActionRuntimeBasis(ProjectReviewRuntimeSession runtime,
                                                     PostDraftReviewSession session) {
         if (!currentWorkingSetConfirmedTermUpdates(runtime, session).isEmpty()) {
@@ -902,23 +870,6 @@ public class ReviewToolExecutor {
             }
         }
         return false;
-    }
-
-    private boolean isSupportedByCurrentWorkingSetConfirmedTermUpdates(ProjectReviewRuntimeSession runtime,
-                                                                       PostDraftReviewSession session,
-                                                                       Map<String, String> entries) {
-        if (entries.isEmpty()) {
-            return false;
-        }
-        Map<String, String> supportedEntries = currentWorkingSetConfirmedTermUpdates(runtime, session);
-        for (Map.Entry<String, String> entry : entries.entrySet()) {
-            String sourceKey = TermTextNormalizer.keyText(entry.getKey());
-            String targetTerm = supportedEntries.get(sourceKey);
-            if (targetTerm == null || !targetTerm.equals(entry.getValue())) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private Map<String, String> currentWorkingSetConfirmedTermUpdates(ProjectReviewRuntimeSession runtime,

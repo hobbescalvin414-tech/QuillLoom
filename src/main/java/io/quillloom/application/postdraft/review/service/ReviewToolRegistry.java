@@ -30,20 +30,20 @@ public class ReviewToolRegistry {
     public static ReviewToolRegistry defaultRegistry() {
         return new ReviewToolRegistry(List.of(
                 ReviewToolDefinition.builder("read_previous_chunks", "Read previous chunks as local context evidence.")
-                        .whenToUse("Use only when the current focus needs nearby previous context to judge continuity, reference resolution, action flow, or tone.")
+                        .whenToUse("Use only when the current focus needs nearby previous context to judge continuity, reference resolution, action flow, or tone. Use count=1 by default. Use count=2 only when one adjacent chunk is clearly insufficient for the unresolved judgment. Prefer another small adjacent read over a large single read.")
                         .whenNotToUse("Do not use this for project-wide searching or repeated reads of the same direction and quantity.")
                         .resultSemantics("Returned chunks are local evidence for the current focus and expand the workingSet. Already completed chunks remain context evidence only.")
                         .repeatPolicy(ToolRepeatPolicy.AVOID_SAME_SIGNATURE)
-                        .nextStepGuidance("After reading context, first verify whether continuity is now objectively established. If not, continue adjacent reading before evaluate_focus or complete_working_set.")
+                        .nextStepGuidance("After each adjacent read, first verify whether the current continuity or logic uncertainty is now objectively closed. If not, continue with another small adjacent read before evaluate_focus or complete_working_set. Prefer incremental 1-2 chunk expansion across multiple rounds over a large-range single read.")
                         .requiredArguments(Set.of("count"))
                         .argumentSchemas(List.of(new ToolArgumentSchema("count", "integer", true, "Number of previous chunks to read. Must be a positive integer.")))
                         .build(),
                 ReviewToolDefinition.builder("read_next_chunks", "Read next chunks as local context evidence.")
-                        .whenToUse("Use only when the current focus needs nearby following context to judge transition, continuation, naming continuity, or logic flow.")
+                        .whenToUse("Use only when the current focus needs nearby following context to judge transition, continuation, naming continuity, or logic flow. Use count=1 by default. Use count=2 only when one adjacent chunk is clearly insufficient for the unresolved judgment. Prefer another small adjacent read over a large single read.")
                         .whenNotToUse("Do not prefetch unrelated future chunks and do not use this as a project-wide scanning tool.")
                         .resultSemantics("Returned chunks are local evidence for the current focus and expand the workingSet. Do not submit them until they are actually completed.")
                         .repeatPolicy(ToolRepeatPolicy.AVOID_SAME_SIGNATURE)
-                        .nextStepGuidance("After reading forward context, first verify whether continuity is now objectively established. If not, continue adjacent reading before evaluate_focus or complete_working_set.")
+                        .nextStepGuidance("After each adjacent read, first verify whether the current continuity or logic uncertainty is now objectively closed. If not, continue with another small adjacent read before evaluate_focus or complete_working_set. Prefer incremental 1-2 chunk expansion across multiple rounds over a large-range single read.")
                         .requiredArguments(Set.of("count"))
                         .argumentSchemas(List.of(new ToolArgumentSchema("count", "integer", true, "Number of next chunks to read. Must be a positive integer.")))
                         .build(),
@@ -79,7 +79,7 @@ public class ReviewToolRegistry {
                 ReviewToolDefinition.builder("read_confirmed_terms", "Look up project-level confirmed translations by source term. Returns hits only for matched source terms.")
                         .whenToUse("Use only when a source term is actually visible in the current focus or already-read workingSet and project-level naming must be checked.")
                         .whenNotToUse("Do not pre-query terms that are not visible in the current focus. After a hit or miss for the same sourceTerm in this focus, do not query it again.")
-                        .resultSemantics("Both confirmedTerm hits and confirmedTermLookupMiss entries are authoritative query results. A miss only means not registered yet; it is not permission to register and not direct write-table evidence.")
+                        .resultSemantics("Both confirmedTerm hits and confirmedTermLookupMiss entries are authoritative query results. A miss only means not registered yet; by itself it is not enough to register, but it may support record_confirmed_terms once a stable working-set pair is already closed.")
                         .repeatPolicy(ToolRepeatPolicy.FORBID_SAME_SIGNATURE_AFTER_SUCCESS)
                         .authoritativeResult(true)
                         .nextStepGuidance("After a hit, check whether the current translation already uses it. If yes and nothing else is wrong, complete_working_set; otherwise evaluate_focus.")
@@ -88,7 +88,7 @@ public class ReviewToolRegistry {
                         .build(),
                 ReviewToolDefinition.builder("record_confirmed_terms", "Record stable source->target pairs into the project confirmed-term store. This does not finish the current chunk.")
                         .whenToUse("Use only when the current anchor or workingSet has already established a stable source->target pair from actual sourceText and translatedText evidence.")
-                        .whenNotToUse("Do not use this instead of revision. Do not record conflicts with existing confirmed terms. Do not record terms not visible in the current focus. Do not rely only on confirmedTermLookupMiss, decisionNotes, transitionNote, or translatorCommentary. Do not use it to backfill draft-stage omissions.")
+                        .whenNotToUse("Do not use this instead of revision. Do not record conflicts with existing confirmed terms. Do not record terms not visible in the current focus. Do not rely only on confirmedTermLookupMiss, decisionNotes, transitionNote, or translatorCommentary.")
                         .resultSemantics("A successful result means the project accepted the registration for this round. It does not mean the current chunk is complete.")
                         .repeatPolicy(ToolRepeatPolicy.STATE_TRANSITION_ONLY)
                         .nextStepGuidance("After recording, verify that the current translation is consistent. If consistent, complete_working_set; otherwise evaluate_focus or draft_revision.")
@@ -122,11 +122,11 @@ public class ReviewToolRegistry {
                         .nextStepGuidance("Before calling this tool, explain clearly in top-level reason what local evidence could not resolve.")
                         .build(),
                 ReviewToolDefinition.builder("complete_working_set", "Submit the chunkIds that are actually completed in the current anchor round.")
-                        .whenToUse("Use when the current workingSet has been fully reviewed or revised, and the anchor chunk is ready to submit.")
+                        .whenToUse("Use when the current focus evidence is already closed for this round and the anchor chunk is ready to submit. The current workingSet may still contain adjacent chunks kept only as context evidence.")
                         .whenNotToUse("chunkIds must not omit the anchor. Do not submit chunks outside the current workingSet, already completed chunks, or chunks used only as context evidence.")
                         .resultSemantics("A successful result commits the review outcome for the specified chunkIds and advances to the next pending chunk.")
                         .repeatPolicy(ToolRepeatPolicy.STATE_TRANSITION_ONLY)
-                        .nextStepGuidance("Before submission, ensure chunkIds contain only still-pending chunks actually completed in this round. If focusChunk is no longer pending, do not call complete_working_set for that stale focus. If no pending chunk remains afterward, use complete_project next.")
+                        .nextStepGuidance("Before submission, ensure chunkIds contain only still-pending chunks actually completed in this round. Adjacent chunks read only as context evidence do not automatically become required chunkIds, and the current focus anchor may still be completed on its own once its evidence is closed. If focusChunk is no longer pending, do not call complete_working_set for that stale focus. If no pending chunk remains afterward, use complete_project next.")
                         .requiredArguments(Set.of("chunkIds"))
                         .argumentSchemas(List.of(new ToolArgumentSchema("chunkIds", "string[]", true, "Chunk IDs completed in this round. Must include the current anchor and come from the current workingSet.")))
                         .build(),

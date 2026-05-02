@@ -380,6 +380,35 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
     }
 
     @Test
+    void shouldExposeExactWhitelistInInvestigationSchemaText() {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from("""
+                        {
+                          "toolName": "evaluate_focus",
+                          "arguments": {},
+                          "reason": "need evaluation"
+                        }
+                        """))
+                .build());
+
+        OpenAiCompatibleReviewAgentStructuredGenerationClient client =
+                new OpenAiCompatibleReviewAgentStructuredGenerationClient(chatModel, new ObjectMapper());
+
+        client.generateNextToolDecision(null, "prompt");
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModel).chat(captor.capture());
+        String schemaText = String.valueOf(captor.getValue().responseFormat().jsonSchema());
+
+        assertTrue(schemaText.contains("Allowed toolNames are exactly"));
+        assertTrue(schemaText.contains("read_previous_chunks"));
+        assertTrue(schemaText.contains("complete_project"));
+        assertTrue(schemaText.contains("Do not invent aliases"));
+        assertTrue(schemaText.contains("read_adjacent_chunks"));
+    }
+
+    @Test
     void shouldExposeRecordConfirmedTermsEntriesSchemaDescriptionFromRegistryContract() {
         ChatModel chatModel = mock(ChatModel.class);
         when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
@@ -527,6 +556,35 @@ class OpenAiCompatibleReviewAgentStructuredGenerationClientTest {
         );
 
         assertTrue(error.getMessage().contains("unexpected_argument:reason"));
+    }
+
+    @Test
+    void shouldAttachStructuredReviewAgentErrorContextWhenToolNameIsUnregistered() throws Exception {
+        ChatModel chatModel = mock(ChatModel.class);
+        when(chatModel.chat(any(ChatRequest.class))).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from("""
+                        {
+                          "toolName": "read_adjacent_chunks",
+                          "arguments": {
+                            "count": 1
+                          },
+                          "reason": "need adjacent context"
+                        }
+                        """))
+                .build());
+
+        OpenAiCompatibleReviewAgentStructuredGenerationClient client =
+                new OpenAiCompatibleReviewAgentStructuredGenerationClient(chatModel, new ObjectMapper());
+
+        LlmStructuredOutputException error = assertThrows(
+                LlmStructuredOutputException.class,
+                () -> client.generateNextToolDecision(null, "prompt")
+        );
+
+        LlmStructuredOutputException.ReviewAgentErrorContext context = error.reviewAgentErrorContext();
+        assertNotNull(context);
+        assertEquals("unregistered_tool", context.validationError());
+        assertEquals("read_adjacent_chunks", context.previousInvalidToolName());
     }
 
     @Test

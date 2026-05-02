@@ -13,8 +13,8 @@ import java.util.Objects;
 public class LlmBackedRevisionSelfCheckService implements RevisionSelfCheckService {
 
     private static final String SELF_CHECK_SYSTEM_PROMPT = """
-            你是译后审校 Agent，当前需要对 revision draft 做本地 self-check。
-            严格输出 JSON 对象，不要附加解释文本。
+            You are a post-draft review agent. Perform a local self-check on the current revision draft.
+            Return a JSON object only. Do not add explanatory text outside JSON.
             """;
 
     private final RevisionSelfCheckPromptBuilder promptBuilder;

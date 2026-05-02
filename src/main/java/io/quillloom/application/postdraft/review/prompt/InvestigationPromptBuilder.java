@@ -76,7 +76,7 @@ public class InvestigationPromptBuilder {
 
                 [Output Reminder]
                 Output only the next tool decision. First make sure the tool choice and argument structure are valid. Then make sure the decision follows the current round's gates.
-                Human-visible summary fields such as reason / questionForHuman should follow the current translation target language by default. 当前项目默认用中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
+                Human-visible summary fields such as reason / questionForHuman should follow the current translation target language by default. The current project default is Chinese. Keep sourceText quotes, source terms, tool names, and JSON keys as-is when needed.
                 Return exactly one valid JSON object. The selected tool's arguments must already be valid in one shot. Example: {"toolName": "read_confirmed_terms", "arguments": {"sourceTerms": ["<source-term>"]}, "reason": "need project-level confirmed-term lookup"}
                 """.formatted(
                 anchorChunkId,

@@ -463,7 +463,7 @@ class ReviewToolExecutorGuardrailTest {
     }
 
     @Test
-    void shouldRejectRecordConfirmedTermsWhenOnlyDrivenByLookupMissAndLowAuthorityNotes() {
+    void shouldAllowRecordConfirmedTermsWhenLookupMissLeavesStableWorkingSetPairUnregistered() {
         InMemoryReader reader = new InMemoryReader(List.of(chunkWithTexts(
                 "chunk-41",
                 "Bernolle entered the room.",
@@ -487,12 +487,8 @@ class ReviewToolExecutorGuardrailTest {
                 )
         );
 
-        assertFalse(result.success());
-        assertTrue(result.rejection().rejectionReason().contains("invalid_record_confirmed_terms_basis"));
-        assertTrue(termWriter.lastEntries.isEmpty());
-        PostDraftReviewSession nextSession = result.nextRuntime().currentFocusSession().orElseThrow();
-        assertTrue(nextSession.transcriptStore().entries().stream()
-                .anyMatch(entry -> entry.contains("Review Agent does not fill D missing confirmedTermUpdates")));
+        assertTrue(result.success());
+        assertEquals(Map.of("Bernolle", "Bernolle translated text"), termWriter.lastEntries);
     }
 
     @Test
@@ -787,7 +783,7 @@ class ReviewToolExecutorGuardrailTest {
     }
 
     @Test
-    void shouldRejectBernolleWriteTableAttemptWhenOnlyMissNotesAndCommentaryAreCited() {
+    void shouldAllowBernolleWriteTableAttemptWhenProjectConfirmedTermsStillMissIt() {
         InMemoryReader reader = new InMemoryReader(List.of(chunkWithTexts(
                 "chunk-48",
                 "Bernolle entered the room.",
@@ -811,13 +807,14 @@ class ReviewToolExecutorGuardrailTest {
                 )
         );
 
-        assertFalse(result.success());
-        assertTrue(result.rejection().rejectionReason().contains("invalid_record_confirmed_terms_basis"));
-        assertTrue(termWriter.lastEntries.isEmpty());
+        assertTrue(result.success());
+        assertEquals(1, termWriter.lastEntries.size());
+        assertTrue(termWriter.lastEntries.containsKey("Bernolle"));
+        assertFalse(termWriter.lastEntries.get("Bernolle").isBlank());
     }
 
     @Test
-    void shouldRejectRecordConfirmedTermsWhenOnlySupportedBySourceTargetAlignment() {
+    void shouldAllowRecordConfirmedTermsWhenSupportedBySourceTargetAlignment() {
         InMemoryReader reader = new InMemoryReader(List.of(chunkWithTexts(
                 "chunk-42",
                 "Bernolle entered the room.",
@@ -836,9 +833,8 @@ class ReviewToolExecutorGuardrailTest {
                 )
         );
 
-        assertFalse(result.success());
-        assertTrue(result.rejection().rejectionReason().contains("invalid_record_confirmed_terms_basis"));
-        assertTrue(termWriter.lastEntries.isEmpty());
+        assertTrue(result.success());
+        assertEquals(Map.of("Bernolle", "Bernolle CN"), termWriter.lastEntries);
     }
 
     @Test
@@ -866,6 +862,32 @@ class ReviewToolExecutorGuardrailTest {
 
         assertTrue(result.success());
         assertEquals(Map.of("Bernolle", "Bernolle CN"), termWriter.lastEntries);
+    }
+
+    @Test
+    void shouldRejectRecordConfirmedTermsWhenSourceTermAlreadyExistsInProjectConfirmedTerms() {
+        InMemoryReader reader = new InMemoryReader(List.of(chunkWithTexts(
+                "chunk-49",
+                "Bernolle entered the room.",
+                "Bernolle CN"
+        )));
+        reader.confirmedTerms = Map.of("Bernolle", "Bernolle CN");
+        RecordingTermWriter termWriter = new RecordingTermWriter();
+        ReviewToolExecutor executor = newExecutor(reader, termWriter);
+        ProjectReviewRuntimeSession runtime = initialRuntime(reader, "chunk-49");
+
+        ReviewToolExecutionResult result = executor.execute(
+                runtime,
+                new ReviewToolDecision(
+                        "record_confirmed_terms",
+                        Map.of("entries", Map.of("Bernolle", "Bernolle CN")),
+                        "record already registered term"
+                )
+        );
+
+        assertFalse(result.success());
+        assertEquals("invalid_record_confirmed_terms_basis:already_registered_in_project_confirmed_terms", result.rejection().rejectionReason());
+        assertTrue(termWriter.lastEntries.isEmpty());
     }
 
     @Test
@@ -1359,4 +1381,3 @@ class ReviewToolExecutorGuardrailTest {
         }
     }
 }
-

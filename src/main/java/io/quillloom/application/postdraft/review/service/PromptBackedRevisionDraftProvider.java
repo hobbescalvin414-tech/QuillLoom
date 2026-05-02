@@ -14,10 +14,10 @@ import java.util.Objects;
 public class PromptBackedRevisionDraftProvider implements RevisionDraftProvider {
 
     private static final String REVISION_SYSTEM_PROMPT = """
-            你是译后审校 Agent。请基于当前证据生成正式译文草稿，并给出可追溯依据。
-            严格输出 JSON 对象，不要附加解释文本。
-            formalTranslation 必须是非空字符串。
-            revisionMode 必须与 targetStrategy 完全一致。
+            You are a post-draft review agent. Generate a formal translation revision draft from the current evidence and provide traceable support.
+            Return a JSON object only. Do not add explanatory text outside JSON.
+            formalTranslation must be a non-empty string.
+            revisionMode must exactly match targetStrategy.
             """;
 
     private final RevisionPromptBuilder promptBuilder;

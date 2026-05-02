@@ -157,7 +157,12 @@ public class PromptBackedNextStepDecisionProvider {
                 );
             }
             int nextRepairAttempt = repairsUsed + 1;
-            String repairPrompt = buildStructuredOutputRepairPrompt(session, state.originalInvestigationPrompt(), ex.getMessage());
+            String repairPrompt = buildStructuredOutputRepairPrompt(
+                    session,
+                    state.originalInvestigationPrompt(),
+                    ex.getMessage(),
+                    ex.reviewAgentErrorContext()
+            );
             dumpPrompt(
                     session,
                     state.systemPrompt(),
@@ -483,7 +488,7 @@ public class PromptBackedNextStepDecisionProvider {
                 If the selected tool has no arguments, return "arguments": {}.
                 If you switch tools, the new `toolName`, `arguments`, and `reason` must already be valid together.
                 For complete_working_set, `chunkIds` must include anchorChunkId=%s, must come from currentWorkingSet=%s, and must not submit chunks read only as context evidence.
-                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
+                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. The current project default is Chinese. Keep sourceText quotes, source terms, tool names, and JSON keys as-is when needed.
 
                 [Repair Target Alignment]
                 repair must align with the current stage's original task goal, not a different task:
@@ -522,7 +527,7 @@ public class PromptBackedNextStepDecisionProvider {
                 2. Do not return proposal DTO fields such as action / entries array.
                 3. Do not use proposal NOT_APPLICABLE as permission to force a different route without valid tool arguments.
                 4. If evidence is still insufficient for record_confirmed_terms, choose another valid investigation or evaluation step.
-                5. Human-visible summary fields such as reason / proposalReason / questionForHuman should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
+                5. Human-visible summary fields such as reason / proposalReason / questionForHuman should follow the current translation target language by default. The current project default is Chinese. Keep sourceText quotes, source terms, tool names, and JSON keys as-is when needed.
                 """.formatted(
                 proposal.reason(),
                 proposal.entries(),
@@ -549,16 +554,16 @@ public class PromptBackedNextStepDecisionProvider {
                 You are now deciding only whether the current focus should record confirmed terms.
                 Return one JSON object with:
                 - action: RECORD_CONFIRMED_TERMS or NOT_APPLICABLE
-                - reason: short justification, default to Chinese for this project unless keeping sourceText 原文引用、术语原文、tool 名称、JSON 键名
+                - reason: short justification, default to Chinese for this project unless keeping sourceText quotes, source terms, tool names, or JSON keys as-is
                 - entries: array of {"sourceTerm":"...","targetTerm":"..."}
 
                 Narrow routing constraints:
                 1. This path is entered only because the current focus already has high-weight stable pair signals.
-                2. Low-priority signals such as decisionNotes / translatorCommentary / transitionNote / confirmedTermLookupMiss do not independently justify recording.
+                2. Low-priority signals such as decisionNotes / translatorCommentary / transitionNote / confirmedTermLookupMiss do not independently justify recording. confirmedTermLookupMiss may still support recording when stable working-set sourceText / translatedText evidence has already closed the pair and no project-level conflict exists.
                 3. If the current focus does not support recording, return action=NOT_APPLICABLE and entries=[].
                 4. If action=RECORD_CONFIRMED_TERMS, entries must be non-empty and every pair must stay inside the current workingSet evidence scope.
                 5. Keep pair extraction explicit. Do not explain pairs only in reason.
-                6. Human-visible summary fields should follow the current translation target language by default. 当前项目优先中文。
+                6. Human-visible summary fields should follow the current translation target language by default. The current project default is Chinese.
 
                 Current stable pair signals:
                 %s
@@ -602,13 +607,13 @@ public class PromptBackedNextStepDecisionProvider {
                 Do not turn repair into replanning the whole task.
                 Return exactly one valid JSON object for proposal only:
                 - action: RECORD_CONFIRMED_TERMS or NOT_APPLICABLE
-                - reason: short justification, default to Chinese for this project unless keeping sourceText 原文引用、术语原文、tool 名称、JSON 键名
+                - reason: short justification, default to Chinese for this project unless keeping sourceText quotes, source terms, tool names, or JSON keys as-is
                 - entries: [{"sourceTerm":"...","targetTerm":"..."}]
                 Do not return final tool arguments or arguments.entries map here.
                 If action=RECORD_CONFIRMED_TERMS, entries must be non-empty.
                 If action=NOT_APPLICABLE, entries must be [].
                 Keep pair extraction explicit and conflict-free.
-                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
+                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. The current project default is Chinese. Keep sourceText quotes, source terms, tool names, and JSON keys as-is when needed.
 
                 [Repair Target Alignment]
                 repair must align with the current stage's original task goal, not a different task:
@@ -715,13 +720,14 @@ public class PromptBackedNextStepDecisionProvider {
 
     private String buildStructuredOutputRepairPrompt(PostDraftReviewSession session,
                                                      String originalPrompt,
-                                                     String errorMessage) {
+                                                     String errorMessage,
+                                                     LlmStructuredOutputException.ReviewAgentErrorContext reviewAgentErrorContext) {
         String toolArgumentSummary = toolRegistry.definitions().stream()
                 .map(d -> d.toolName() + ": arguments=" + d.renderArgumentsExample()
                         + (d.renderArgumentRequirements().isBlank() ? "" : ", " + d.renderArgumentRequirements()))
                 .reduce((a, b) -> a + "; " + b)
                 .orElse("(no tool argument summary)");
-        return originalPrompt + """
+        String basePrompt = originalPrompt + """
 
                 [Repair Scope]
                 The previous output is unusable. Repair only the listed format or argument errors.
@@ -749,7 +755,7 @@ public class PromptBackedNextStepDecisionProvider {
                 `arguments` may contain only fields declared by the selected tool.
                 If the selected tool has no arguments, return "arguments": {}.
                 Do not return a partial fix. The final `toolName`, `arguments`, and `reason` must already be valid together.
-                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. 当前项目优先中文。Keep sourceText 原文引用、术语原文、tool 名称、JSON 键名 as-is when needed.
+                Human-visible summary fields such as reason / questionForHuman / repair justification should follow the current translation target language by default. The current project default is Chinese. Keep sourceText quotes, source terms, tool names, and JSON keys as-is when needed.
 
                 [Repair Target Alignment]
                 repair must align with the current stage's original task goal, not a different task:
@@ -761,7 +767,42 @@ public class PromptBackedNextStepDecisionProvider {
                 session.focus().chunkId(),
                 session.workingSet().chunkIds(),
                 toolArgumentSummary
-        ) + nextStepEntriesCompatibilityRepairGuidance(errorMessage);
+        );
+        if (isUnregisteredToolError(reviewAgentErrorContext)) {
+            return basePrompt + nextStepUnregisteredToolRepairGuidance(reviewAgentErrorContext);
+        }
+        if (isEntriesRepairError(errorMessage)) {
+            return basePrompt + nextStepEntriesCompatibilityRepairGuidance(errorMessage);
+        }
+        return basePrompt;
+    }
+
+    private String nextStepUnregisteredToolRepairGuidance(LlmStructuredOutputException.ReviewAgentErrorContext reviewAgentErrorContext) {
+        String previousInvalidToolName = reviewAgentErrorContext == null
+                || reviewAgentErrorContext.previousInvalidToolName() == null
+                || reviewAgentErrorContext.previousInvalidToolName().isBlank()
+                ? "unavailable"
+                : reviewAgentErrorContext.previousInvalidToolName();
+        return """
+
+                [unregistered_tool repair]
+                The previous output used a toolName that is not registered.
+                validationError: unregistered_tool
+                previousInvalidToolName: %s
+
+                Allowed toolNames are exactly:
+                %s
+
+                Repair rules:
+                1. First determine what action type previousInvalidToolName was trying to express.
+                2. Then replace it with exactly one registered toolName from the list above.
+                3. Copy the selected toolName exactly. Do not rename, summarize, merge, or paraphrase tool names.
+                4. Forbidden invalid aliases include: read_chunks, read_adjacent_chunks, adjacent_read, read_context_chunks.
+                5. If previousInvalidToolName is read_adjacent_chunks or any adjacent-reading alias, do not invent a combined tool. Choose exactly one of read_previous_chunks or read_next_chunks based on the immediate evidence need.
+                6. If previousInvalidToolName is unavailable, choose exactly one registered toolName by using the current-round evidence and the whitelist above. Do not invent a fallback alias.
+                7. After changing toolName, arguments must also match the selected registered tool in the same response.
+                8. Return one valid JSON object only.
+                """.formatted(previousInvalidToolName, renderRegisteredToolNames());
     }
 
     private String nextStepEntriesCompatibilityRepairGuidance(String errorMessage) {
@@ -802,6 +843,18 @@ public class PromptBackedNextStepDecisionProvider {
 
     private boolean isEntriesRepairError(String errorMessage) {
         return errorMessage != null && errorMessage.contains("invalid_argument:entries");
+    }
+
+    private boolean isUnregisteredToolError(LlmStructuredOutputException.ReviewAgentErrorContext reviewAgentErrorContext) {
+        return reviewAgentErrorContext != null
+                && "unregistered_tool".equals(reviewAgentErrorContext.validationError());
+    }
+
+    private String renderRegisteredToolNames() {
+        return toolRegistry.definitions().stream()
+                .map(definition -> definition.toolName())
+                .reduce((left, right) -> left + "\n" + right)
+                .orElse("(none)");
     }
 
     private String extractRawOutput(String errorMessage) {
