@@ -1,4 +1,0 @@
-#NOTE: This is a Maven Resolver internal implementation file, its format can be changed without prior notice.
-#Sat Apr 18 20:45:10 CST 2026
-@default-central-https\://repo.maven.apache.org/maven2/.lastUpdated=1776516310084
-https\://repo.maven.apache.org/maven2/.error=Could not transfer artifact org.graalvm.buildtools\:native-maven-plugin\:pom\:0.10.6 from/to central (https\://repo.maven.apache.org/maven2)\: Permission denied\: no further information

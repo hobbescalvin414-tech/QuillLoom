@@ -24,6 +24,16 @@ run-output/
 # Book source (runtime input copies)
 book/
 
+# Local developer configuration
+src/main/resources/application-dev.yml
+
+# Local Maven cache copies
+.mvn/repository/
+${maven.multiModuleProjectDirectory}/
+
+# Local docs are not part of the cloud backup scope
+docs/
+
 # .worktrees is managed by git itself but we keep this for safety
 .worktrees/
 
